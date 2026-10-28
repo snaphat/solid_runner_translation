@@ -1,11 +1,9 @@
 """
-This module supplies display limits and screenshot text positions, and checks that battle captions fit on one line.
+This module supplies text display limits and checks that battle captions fit on one line.
 
 The tables map original-ROM text offsets to categories such as item descriptions,
 job reports, and chapter headings, with width and row limits for their displays.
 Layout validation uses these limits when checking English translations.
-get_capture_window() returns a screen origin and RGB brightness threshold so
-screenshot checks know where to look for an entry's text.
 
 validate_combat_captions() takes ROM font bytes and translation insertion
 records, measures and wraps each battle caption, and raises ValueError if any
@@ -99,39 +97,6 @@ def classify_text_window(a: int) -> str | None:
             return name
 
     return None
-
-
-def get_capture_window(entry: str) -> tuple[int, int, tuple[int, int, int]]:
-    """
-    Select the screen origin and ink threshold for a captured text entry.
-
-    Dialogue, battle captions, centered narration, map labels and concert lyrics
-    occupy different screen regions. Pixel checks use this lookup to place expected
-    font pixels into the correct frame coordinates.
-
-    Args:
-        entry (str): Six-digit hexadecimal text-entry ID.
-
-    Returns:
-        tuple[int, int, tuple[int, int, int]]: Text-plane origin (x, y) in captured-frame
-            pixels, followed by the RGB brightness thresholds used to recognize ink.
-    """
-    # These are framebuffer pixel origins and per-channel brightness cutoffs,
-    # not text-storage sizes. Different overlays use different colors and positions.
-    n = int(entry, 16)
-    if is_combat_caption(n):
-        return 8, 200, (150, 150, 120)  # battle caption strip
-
-    if n in (0x169A7E, 0x16E1C5, 0x0B97F6):
-        return 8, 105, (100, 100, 80)  # centred captions
-
-    if 0x0F3978 <= n <= 0x0F3C21:
-        return 8, 201, (100, 100, 80)  # map labels
-
-    if 0x0F4EB7 <= n <= 0x0F4FA5:
-        return 8, 192, (220, 220, 180)  # concert lyric overlay
-
-    return 8, 168, (220, 220, 180)  # dialogue window
 
 
 def is_combat_caption(offset: int) -> bool:
