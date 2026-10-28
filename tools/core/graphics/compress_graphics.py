@@ -1,5 +1,5 @@
 """
-This module compresses, decompresses, and repacks game resources and exports tile-sheet previews.
+This module compresses, decompresses, reads, and repacks game resources.
 
 The decoder takes ROM bytes and a resource offset and returns decompressed
 bytes plus the position after the compressed stream. The two encoders produce
@@ -9,8 +9,7 @@ Resource-group helpers recompress a changed resource together with adjacent
 resources, then check and write the compressed bytes and pointers
 into a caller-supplied ROM buffer.
 
-The preview writer exports grayscale PNG tile sheets using the tile decoder
-in core.graphics.convert_tiles. That module also provides the 4bpp tile writer.
+Grayscale PNG previews are provided by core.graphics.write_tile_sheet.
 The command-line interface is in tools/graphics/inspect_resources.py.
 
 In the compressed format, 00 ends a stream, 01-7F copies that many literal
@@ -23,10 +22,8 @@ from __future__ import annotations
 
 import collections
 import functools
-import os
-from typing import Iterator, Literal, Sequence
+from typing import Iterator, Sequence
 
-from core.graphics import convert_tiles
 from core.rom.convert_addresses import convert_file_offset_to_snes, resolve_bank_pointer
 
 
@@ -35,7 +32,7 @@ def _require_byte_buffer(data: object, accepted: tuple[type[bytes] | type[bytear
     Reject values outside a reader or writer's supported byte-buffer types.
 
     Args:
-        data (object): Resource, tile or destination buffer supplied by the caller.
+        data (object): Resource or destination buffer supplied by the caller.
         accepted (tuple[type[bytes] | type[bytearray], ...]): Allowed buffer classes;
             bytes is immutable and bytearray supports in-place writes.
 
@@ -386,52 +383,6 @@ def iter_resource_blocks(rom: bytes | bytearray) -> Iterator[tuple[int, list[tup
             # a break above rejects the entire candidate table, not just one block.
             if res:
                 yield bank, res
-
-
-def write_tile_sheet(
-    data: bytes | bytearray, bpp: Literal[2, 4], path: str | os.PathLike[str], cols: int = 16
-) -> None:
-    """
-    Write 8x8 tiles as a grayscale PNG sheet, drawn at twice their size.
-
-    Args:
-        data (bytes | bytearray): Planar tile bytes to render; not
-            modified.
-        bpp (Literal[2, 4]): Bits per pixel in the source planar tiles.
-        path (str | os.PathLike[str]): Destination PNG tile-sheet path.
-        cols (int, optional): Positive number of tile columns in the exported
-            sheet.
-
-    Raises:
-        TypeError: data is not bytes or bytearray.
-        ValueError: bpp or cols is invalid, or data ends with an incomplete tile.
-            Both options require integers; booleans are rejected.
-    """
-    from core.graphics import write_png as png
-
-    _require_byte_buffer(data, (bytes, bytearray))
-    if type(bpp) is not int or type(cols) is not int or bpp not in (2, 4) or cols <= 0:
-        raise ValueError("Tile sheets require 2/4bpp and a positive column count")
-    if len(data) % (8 * bpp):
-        raise ValueError("Tile sheet data must contain complete tiles")
-    # An 8x8 tile uses eight bytes per bitplane. Decode each tile separately
-    # then place it in the preview grid without changing its native pixel order.
-    tb = 8 * bpp
-    n = len(data) // tb
-    if not n:
-        return
-
-    rows = (n + cols - 1) // cols
-    pixels = [bytearray(cols * 8) for _ in range(rows * 8)]
-    for t in range(n):
-        tile = convert_tiles.get_pixels(data, t, bpp)
-        for y, row in enumerate(tile):
-            for x, color in enumerate(row):
-                pixels[(t // cols) * 8 + y][(t % cols) * 8 + x] = color * (255 // ((1 << bpp) - 1))
-
-    # Enlarge pixels by two in both dimensions without filtering palette edges.
-    doubled = [bytes(v for v in row for _ in (0, 1)) for row in pixels for _ in (0, 1)]
-    png.write_png(path, doubled, 1)
 
 
 def read_resource_block(rom: bytes | bytearray, bank: int, index: int) -> bytes:
