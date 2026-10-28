@@ -1,30 +1,25 @@
 """
-This module compresses, decompresses, reads, and repacks game resources.
+This module encodes and decodes the game's compressed resource streams.
 
 The decoder takes ROM bytes and a resource offset and returns decompressed
 bytes plus the position after the compressed stream. The two encoders produce
 game-format compressed bytes. One immediately emits the longest available
 backreference at each position; the other finds a minimum-size encoding.
-Resource-group helpers recompress a changed resource together with adjacent
-resources, then check and write the compressed bytes and pointers
-into a caller-supplied ROM buffer.
+ROM pointer-table lookup is provided by core.graphics.read_resources;
+core.graphics.repack_resources installs recompressed resource groups.
 
 Grayscale PNG previews are provided by core.graphics.write_tile_sheet.
 The command-line interface is in tools/graphics/inspect_resources.py.
 
 In the compressed format, 00 ends a stream, 01-7F copies that many literal
 bytes, and 80-FF copies (control & 7F) + 3 bytes from previously decoded output.
-The following byte specifies the backward distance minus one. Resource tables
-store 16-bit pointers at the beginning of each 32 KiB bank.
+The following byte specifies the backward distance minus one.
 """
 
 from __future__ import annotations
 
 import collections
 import functools
-from typing import Iterator, Sequence
-
-from core.rom.convert_addresses import convert_file_offset_to_snes, resolve_bank_pointer
 
 
 def _require_byte_buffer(data: object, accepted: tuple[type[bytes] | type[bytearray], ...]) -> None:
@@ -302,241 +297,3 @@ def decompress_bytes(src: bytes | bytearray, *, require_complete: bool = False) 
     if require_complete and end != len(src):
         raise ValueError("Compressed block contains bytes after its terminator")
     return decoded
-
-
-def read_bank_resource_table(bank: int, *, rom: bytes | bytearray) -> list[int] | None:
-    """
-    Read a plausible resource pointer table from a 32 KiB ROM bank.
-
-    Table words are at least $8000. The table ends where its earliest resource
-    begins.
-
-    Args:
-        bank (int): Zero-based 32 KiB ROM bank index, not an SNES bus-bank byte.
-        rom (bytes | bytearray): ROM containing the bank-local resource
-            pointers.
-
-    Returns:
-        list[int] | None: Resource file offsets, or None if the bank does
-            not have a plausible complete table.
-
-    Raises:
-        TypeError: rom is not bytes or bytearray.
-        ValueError: bank is not an integer identifying a complete standard LoROM
-            bank. Booleans are rejected.
-    """
-    _require_byte_buffer(rom, (bytes, bytearray))
-    if type(bank) is not int or not 0 <= bank < 128 or (bank + 1) * 0x8000 > len(rom):
-        raise ValueError("Resource bank must identify a complete 32 KiB LoROM bank")
-    b0 = bank * 0x8000
-    ptrs: list[int] = []
-    first = 0x10000
-    k = 0
-
-    # Pointers are little-endian CPU addresses within this 32 KiB bank. The
-    # first resource also marks the end of the pointer table.
-    while b0 + k * 2 < b0 + 0x8000 and 0x8000 + k * 2 < first:
-        p = rom[b0 + k * 2] | rom[b0 + k * 2 + 1] << 8
-        if p < 0x8000:
-            break
-
-        ptrs.append(p)
-        first = min(first, p)
-        k += 1
-
-    if not ptrs or first != 0x8000 + len(ptrs) * 2:
-        return None
-
-    return [resolve_bank_pointer(p, b0) for p in ptrs]
-
-
-def iter_resource_blocks(rom: bytes | bytearray) -> Iterator[tuple[int, list[tuple[int, bytes]]]]:
-    """
-    Yield candidate graphics banks and their decoded resource blocks.
-
-    Scan complete 32 KiB banks only. A bank is accepted only when its pointer
-    table is plausible and every listed resource decodes to at least 32 bytes,
-    the size of one 4bpp tile. Smaller resources exclude the entire bank.
-
-    Args:
-        rom (bytes | bytearray): ROM whose banks are scanned for resource
-            tables.
-
-    Yields:
-        tuple[int, list[tuple[int, bytes]]]: Bank index and a list of
-            (resource file offset, decompressed bytes) pairs in table order.
-    """
-    for bank in range(len(rom) // 0x8000):
-        t = read_bank_resource_table(bank, rom=rom)
-        if not t:
-            continue
-
-        res: list[tuple[int, bytes]] = []
-        for off in t:
-            data, _ = decompress(off, rom=rom)
-            if data is None or len(data) < 32:
-                break
-
-            res.append((off, data))
-        else:
-            # Yield a bank only if every candidate resource decoded successfully;
-            # a break above rejects the entire candidate table, not just one block.
-            if res:
-                yield bank, res
-
-
-def read_resource_block(rom: bytes | bytearray, bank: int, index: int) -> bytes:
-    """
-    Read one decompressed resource through its native bank-local table.
-
-    Args:
-        rom (bytes | bytearray): Source ROM containing the resource and pointer table.
-        bank (int): Zero-based 32 KiB file-bank index.
-        index (int): Zero-based resource index within that bank's table.
-
-    Returns:
-        bytes: Decompressed resource contents.
-
-    Raises:
-        AssertionError: The bank table or compressed resource is invalid.
-        IndexError: The resource index is not an integer or is out of bounds;
-            booleans are rejected.
-        ValueError: bank does not identify a complete standard LoROM bank.
-    """
-    # A resource index selects a bank-local table entry, not a direct ROM offset.
-    table = read_bank_resource_table(bank, rom=rom)
-    if table is None:
-        raise AssertionError("Native resource table is invalid")
-    if type(index) is not int or not 0 <= index < len(table):
-        raise IndexError("Resource index is outside the native table")
-    raw, _ = decompress(table[index], rom=rom)
-    if raw is None:
-        raise AssertionError("Native resource could not be decompressed")
-    return raw
-
-
-def pack_resource_group(
-    source: bytes | bytearray, bank: int, first: int, replacement: bytes
-) -> list[bytes]:
-    """
-    Recompress a replacement and adjacent resources into their combined allocation.
-
-    Args:
-        source (bytes | bytearray): Original ROM supplying the resource table and neighbors.
-        bank (int): Zero-based 32 KiB file-bank index.
-        first (int): Table index of the resource being replaced.
-        replacement (bytes): Uncompressed replacement for the first resource.
-
-    Returns:
-        list[bytes]: Packed blocks in table order, stopping at the first fit.
-            The following untouched resource remains at its original offset.
-
-    Raises:
-        AssertionError: The table or resources are invalid, blocks are not
-            contiguous, or the replacement cannot fit before an untouched resource.
-        ValueError: bank or first does not identify a valid resource allocation;
-            noninteger indices, including booleans, are rejected.
-    """
-    table = read_bank_resource_table(bank, rom=source)
-    if table is None:
-        raise AssertionError("Native resource table is invalid")
-    if type(first) is not int or not 0 <= first < len(table) - 1:
-        raise ValueError("Resource group requires a valid first index and following boundary")
-
-    packed: list[bytes] = []
-
-    # Recompression may borrow space saved by neighboring blocks. Require their
-    # original compressed spans to touch so unrelated bytes cannot enter the allocation.
-    for index in range(first, len(table) - 1):
-        raw, end = decompress(table[index], rom=source)
-        if raw is None:
-            raise AssertionError("Native resource could not be decompressed")
-        if end != table[index + 1]:
-            raise AssertionError("Native resource blocks must be contiguous")
-
-        packed.append(compress_optimal(replacement if index == first else raw))
-
-        # Stop at the first fit; the next table entry remains the untouched boundary.
-        if sum(map(len, packed)) <= table[index + 1] - table[first]:
-            return packed
-
-    raise AssertionError("Replacement resource group does not fit its native bank")
-
-
-def write_resource_group(
-    rom: bytearray,
-    source: bytes | bytearray,
-    bank: int,
-    first: int,
-    packed: Sequence[bytes],
-    replacement: bytes,
-    clear_tail: bool = False,
-) -> int:
-    """
-    Verify and install repacked resources with their bank-local pointers.
-
-    Args:
-        rom (bytearray): Destination ROM modified in place after content checks.
-        source (bytes | bytearray): Original ROM defining the allocation and unchanged neighbors.
-        bank (int): Zero-based 32 KiB file-bank index.
-        first (int): Table index of the replaced resource.
-        packed (Sequence[bytes]): Repacked blocks beginning at first.
-            Each block must end exactly at its compression terminator.
-        replacement (bytes): Expected uncompressed first block; subsequent blocks
-            must decode identically to their original resources.
-        clear_tail (bool, optional): Zero unused allocation bytes when true;
-            otherwise retain their existing contents.
-
-    Returns:
-        int: File offset immediately after the installed compressed blocks.
-
-    Raises:
-        TypeError: rom is not a mutable bytearray, source is not bytes or
-            bytearray, or clear_tail is not a boolean.
-        AssertionError: The table, allocation or decoded contents are inconsistent.
-        IndexError: A compressed block is malformed.
-        ValueError: The resource indices are invalid, packed is empty, or the
-            destination ROM does not contain the complete allocation, or a
-            packed block contains bytes after its terminator.
-    """
-    _require_byte_buffer(rom, (bytearray,))
-    if type(clear_tail) is not bool:
-        raise TypeError("clear_tail must be a boolean")
-    table = read_bank_resource_table(bank, rom=source)
-    if table is None:
-        raise AssertionError("Native resource table is invalid")
-    if type(first) is not int or not packed or not 0 <= first < first + len(packed) < len(table):
-        raise ValueError("Resource group must be nonempty and leave a following table boundary")
-    # The first untouched resource defines the allocation limit. Check it before
-    # changing pointers so an oversized group cannot overwrite the following block.
-    limit = table[first + len(packed)]
-    position = table[first]
-    if not 0 <= position <= limit <= len(rom):
-        raise ValueError("Destination ROM does not contain the complete resource allocation")
-    if position + sum(map(len, packed)) > limit:
-        raise AssertionError("Packed resources exceed their native allocation")
-
-    pointers = slice(bank * 0x8000 + first * 2, bank * 0x8000 + (first + len(packed)) * 2)
-    if rom[pointers] != source[pointers] or rom[position:limit] != source[position:limit]:
-        raise AssertionError("Resource destination differs from its original allocation")
-
-    # Check every payload before changing either the table or the destination data.
-    for index, block in enumerate(packed, first):
-        expected = replacement if index == first else decompress(table[index], rom=source)[0]
-        if decompress_bytes(block, require_complete=True) != expected:
-            raise AssertionError("Packed resource differs from its expected contents")
-
-    # Resource order is preserved, but compressed lengths move each start.
-    # Update the 16-bit bank-local pointer alongside its corresponding payload.
-    for index, block in enumerate(packed, first):
-        pointer = bank * 0x8000 + index * 2
-        address = convert_file_offset_to_snes(position) & 0xFFFF
-        rom[pointer : pointer + 2] = address.to_bytes(2, "little")
-        rom[position : position + len(block)] = block
-        position += len(block)
-
-    # Zero padding is selected by the repair's clear_tail policy. Otherwise
-    # leave trailing allocation bytes unchanged after installing the payload.
-    if clear_tail:
-        rom[position:limit] = bytes(limit - position)
-    return position
