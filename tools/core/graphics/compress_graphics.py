@@ -3,25 +3,20 @@ This module compresses and decompresses game resources and converts tile bytes t
 
 The decoder takes ROM bytes and a resource offset and returns decompressed
 bytes plus the position after the compressed stream. The two encoders produce
-game-format compressed bytes using either greedy matching or a smallest-size
-encoding. Resource-group helpers recompress a changed resource together with
-adjacent resources, then check and write the compressed bytes and pointers
+game-format compressed bytes. One immediately emits the longest available
+backreference at each position; the other finds a minimum-size encoding.
+Resource-group helpers recompress a changed resource together with adjacent
+resources, then check and write the compressed bytes and pointers
 into a caller-supplied ROM buffer.
 
 Tile helpers convert 2bpp or 4bpp tile bytes into 8x8 palette-index arrays, write
 4bpp arrays back into tile bytes, and export grayscale PNG tile sheets.
-The scan command lists candidate banks whose pointer tables and compressed
-blocks pass the reader's checks. The sheets command exports those blocks as
-2bpp and 4bpp previews; neither command establishes that the game uses a block.
+The command-line interface is in tools/graphics/inspect_resources.py.
 
 In the compressed format, 00 ends a stream, 01-7F copies that many literal
 bytes, and 80-FF copies (control & 7F) + 3 bytes from previously decoded output.
 The following byte specifies the backward distance minus one. Resource tables
 store 16-bit pointers at the beginning of each 32 KiB bank.
-
-Usage:
-    python tools/core/graphics/compress_graphics.py scan
-    python tools/core/graphics/compress_graphics.py sheets OUTDIR
 """
 
 from __future__ import annotations
@@ -29,12 +24,7 @@ from __future__ import annotations
 import collections
 import functools
 import os
-import sys
-from pathlib import Path
 from typing import Iterator, Literal, Sequence
-
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.rom.convert_addresses import convert_file_offset_to_snes, resolve_bank_pointer
 
@@ -674,32 +664,3 @@ def write_resource_group(
     if clear_tail:
         rom[position:limit] = bytes(limit - position)
     return position
-
-
-if __name__ == "__main__":
-    import argparse
-
-    from core.rom import load_original_rom as original_rom
-
-    # Parse before loading the ROM so help and usage errors do not require the
-    # copyrighted input file to be installed.
-    parser = argparse.ArgumentParser(description="Inspect and export native graphics resources.")
-    commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("scan", help="List banks containing graphics resources")
-    sheets = commands.add_parser("sheets", help="Export tile-sheet PNG previews")
-    sheets.add_argument("outdir", type=Path, help="Directory for exported previews")
-    args = parser.parse_args()
-    rom = original_rom.read_original_rom()
-    if args.command == "scan":
-        for bank, res in iter_resource_blocks(rom):
-            print(
-                "bank %02X: %d blocks, %d bytes out" % (bank, len(res), sum(len(d) for _, d in res))
-            )
-    else:
-        out = args.outdir
-        out.mkdir(parents=True, exist_ok=True)
-
-        for bank, res in iter_resource_blocks(rom):
-            for off, data in res:
-                write_tile_sheet(data, 4, out / ("%06X_4.png" % off))
-                write_tile_sheet(data, 2, out / ("%06X_2.png" % off))
