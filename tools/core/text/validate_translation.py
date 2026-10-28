@@ -23,10 +23,10 @@ import unicodedata
 from typing import TypedDict
 
 from core.text import encode_text as text_encoding
-from core.text import insert_text as text_insertion
-from core.text import measure_text
+from core.text import layout_text, measure_text
 from core.text import measure_text_windows as windows
 from core.text.read_text_tokens import parse_encoded_text as parse_encoded_text
+from core.text.read_text_tokens import split_dialogue_pages
 from core.text.read_translation_files import TextMode, TranslationEntry
 
 
@@ -245,7 +245,7 @@ def encode_entry_layout(
 
     # Menus encode explicit column positions instead of wrapping ordinary prose.
     if mode == "m":
-        return text_insertion.encode_menu_layout(rom, text, c["width"])
+        return layout_text.encode_menu_layout(rom, text, c["width"])
 
     # Banner centering adds padding during insertion; this width check concerns
     # the unpadded text. Banners and fixed records retain their authored breaks.
@@ -256,7 +256,7 @@ def encode_entry_layout(
 
     # Use the compiler's wrapper so byte and line checks see its actual breaks.
     # Only dialogue mode may introduce new pages when three lines are filled.
-    return text_insertion.wrap_text(rom, text, c["width"] or 236, paginate=mode == "v")
+    return layout_text.wrap_text(rom, text, c["width"] or 236, paginate=mode == "v")
 
 
 def validate_translation_entry(e: TranslationEntry, rom: bytes | bytearray) -> list[str]:
@@ -392,7 +392,7 @@ def validate_translation_entry(e: TranslationEntry, rom: bytes | bytearray) -> l
             out.append("Non-paginated text does not support page breaks or embedded terminators")
 
         if mode == "v":
-            pages = text_insertion.split_dialogue_pages(laid)
+            pages = split_dialogue_pages(laid)
             if len(pages) > 1:
                 # Every page needs a five-byte jump in the original event
                 # script, with FD/18 between pages. Standalone reference

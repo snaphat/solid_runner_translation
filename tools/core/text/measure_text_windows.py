@@ -17,8 +17,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from core.text import insert_text as text_insertion
-from core.text import measure_text
+from core.text import layout_text, measure_text
 from core.text.insert_text import CompleteInsertionRecord
 
 # System-text windows classified by original entry offset. Each (name, lo, hi)
@@ -186,9 +185,9 @@ def validate_combat_captions(
 
         # The combat renderer has no second caption row. Enforce both the entry
         # width and the global strip width before rejecting any resulting line/page break.
-        limit = min(width if width is not None else text_insertion.MAX_W, text_insertion.MAX_W)
+        limit = min(width if width is not None else layout_text.MAX_W, layout_text.MAX_W)
         try:
-            laid = text_insertion.wrap_text(rom, text, limit, paginate=False)
+            laid = layout_text.wrap_text(rom, text, limit, paginate=False)
         except AssertionError as error:
             errors.append(f"{start:06X}: {error}")
             continue
