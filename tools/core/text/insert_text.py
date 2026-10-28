@@ -16,8 +16,8 @@ terminator. Names and strings reached through retargeted references can have
 their own FF terminator. Fixed records, menus, centered text, and short slots
 use separate encoding or placement rules.
 
-Layout helpers measure glyphs from ROM font bytes, wrap dialogue into pages
-of at most three lines, and encode menu-column padding. Newline characters
+Width calculations use core.text.measure_text. Layout helpers wrap dialogue
+into pages of at most three lines and encode menu-column padding. Newline characters
 force line breaks and form feeds force page breaks. Dialogue page boundaries
 use FD followed by event opcode 18, with a segment left in the original slot
 for each page.
@@ -26,18 +26,16 @@ for each page.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Iterator, Literal, TypeAlias
+from typing import Iterable, TypeAlias
 
 from core.rom import allocate_space
 from core.rom.convert_addresses import convert_file_offset_to_snes
+from core.text import measure_text
 from core.text.encode_text import encode_text
-from core.text.read_text_tokens import decode_glyph_index, parse_encoded_text, split_dialogue_pages
+from core.text.read_text_tokens import split_dialogue_pages
 
-FONT = 0x170000  # Native font file offset; each glyph has eleven 16-bit rows.
-VWF_FONT = 0x3F0000  # glyphs 0-255 as the VWF draws them
 MAX_W = 236  # usable pixels per line (30 tiles = 240, keep a margin)
 LINES = 3  # Dialogue rows per page before an automatic page break.
-GAP, SPACEW = 1, 4  # Pixels: inter-glyph gap and space advance; match asm/vwf.asm.
 PAGE = b"\xfd\x18"  # FD waits/ends the page; event opcode 18 starts the next text.
 
 
@@ -68,163 +66,6 @@ def encode_text_jump(off: int) -> bytes:
     # F8 06 is a text jump followed by the low, high and bank address bytes.
     a = convert_file_offset_to_snes(off)
     return bytes([0xF8, 0x06, a & 0xFF, (a >> 8) & 0xFF, a >> 16])
-
-
-def iter_text_tokens(b: bytes) -> Iterator[tuple[bytes, int | Literal["name"] | None]]:
-    """
-    Separate glyphs and commands so layout can measure text without splitting operands.
-
-    One-byte and two-byte glyph codes produce font indices. Insertion commands
-    produce a name marker for runtime-width reservation; other commands and
-    terminators have no glyph index. Every yielded byte string includes the
-    complete command operands.
-
-    Args:
-        b (bytes): Encoded game text, including any control-code operands.
-
-    Yields:
-        tuple[bytes, int | Literal['name'] | None]: Pair (token bytes, glyph index); the second item
-            is a font index (or -1 for newline), "name" for a dynamic insertion,
-            or None for another control or terminator.
-    """
-    for token in parse_encoded_text(b):
-        if token[0] == 0xF8:
-            # These commands insert text whose width is known only at runtime.
-            glyph: int | Literal["name"] | None = (
-                "name" if token[1] in (0x0C, 0x12, 0x18, 0x04) else None
-            )
-        elif token[0] >= 0xFD:
-            # Retain page/record boundaries for layout checks without treating
-            # them as drawable characters.
-            glyph = None
-        else:
-            glyph = decode_glyph_index(token, 0)
-
-        yield token, glyph
-
-
-def measure_glyph_advance(rom: bytes | bytearray, idx: int) -> int:
-    """
-    Measure a glyph advance using the appropriate ROM font table.
-
-    Args:
-        rom (bytes | bytearray): Font tables used to measure the selected
-            glyph.
-        idx (int): Zero-based font glyph index; indices below 256 select the
-            relocated VWF table.
-
-    Returns:
-        int: Horizontal text advance in pixels.
-
-    Raises:
-        ValueError: The glyph index is negative or its font record lies outside the ROM.
-    """
-    base = VWF_FONT if idx < 256 else FONT
-    if idx < 0 or base + (idx + 1) * 22 > len(rom):
-        raise ValueError("Glyph index does not identify a complete ROM font record")
-    # Combine all eleven bitmap rows to find the glyph's leftmost and rightmost ink.
-    acc = 0
-    for r in range(11):
-        o = base + idx * 22 + r * 2
-        acc |= rom[o] | rom[o + 1] << 8
-
-    if not acc:
-        return SPACEW if idx < 256 else 1
-
-    # The font uses the high bits for leftmost pixels; trim blank columns on
-    # both sides before adding the renderer's inter-glyph gap.
-    lz = 16 - acc.bit_length()
-    width = 16 - ((acc & -acc).bit_length() - 1)
-    return width - lz + 1 + GAP
-
-
-WIDE = 13  # Pixel advance reserved per player-entered name glyph, including gap.
-DIGIT_W = 9  # Maximum digit advance in pixels, including gap; reserves number width.
-
-
-def measure_insertion_width(rom: bytes | bytearray, code: bytes) -> int:
-    """
-    Measure the maximum width reserved for a runtime name or number insertion.
-
-    Player-entered names and numeric values use the native maximum lengths. Other
-    name insertions use the widest active system-name entry. Word wrapping uses
-    the result before the actual inserted value is known.
-
-    Args:
-        rom (bytes | bytearray): Font tables used to reserve space for
-            inserted text.
-        code (bytes): Complete F8 insertion token, including opcode and
-            operands.
-
-    Returns:
-        int: Horizontal text advance in pixels.
-
-    Raises:
-        ValueError: code is not one complete supported insertion command, or no
-            active system names are available for an item/opponent insertion.
-    """
-    if (
-        len(parse_encoded_text(code)) != 1
-        or code[0] != 0xF8
-        or code[1] not in (0x04, 0x0C, 0x12, 0x18)
-    ):
-        raise ValueError("Width measurement requires one complete name or number insertion")
-    op = code[1]
-    if op == 0x0C:  # player-entered names: 5 chars, Runner name 6
-        return WIDE * (6 if code[2] == 0x02 else 5)
-
-    if op == 0x04:  # number: arg 1 = value size in bytes
-        return DIGIT_W * {1: 3, 2: 5, 3: 8}.get(code[2], 10)
-
-    from core.text import read_translation_files as script_files
-
-    return max(
-        sum(
-            measure_glyph_advance(rom, g)
-            for _, g in iter_text_tokens(encode_text(e["en"]))
-            if isinstance(g, int)
-        )
-        for e in script_files.load("system")
-        if e.get("mode") == "n" and e.get("en") and not e.get("skip")
-    )  # opponent name / item name
-
-
-def measure_text_width(
-    rom: bytes | bytearray, b: bytes, insert_sizes: dict[bytes, int] | None = None
-) -> int:
-    """
-    Measure text with worst-case dynamic insertion widths.
-
-    Args:
-        rom (bytes | bytearray): Font tables used to measure the encoded
-            text.
-        b (bytes): Encoded game text, including any control-code operands.
-        insert_sizes (dict[bytes, int] | None, optional): Mutable cache for
-            this layout. Discard it after changing ROM, font or translation
-            inputs; None creates a fresh cache.
-
-    Returns:
-        int: Horizontal text advance in pixels.
-    """
-    # A layout may measure many candidate lines. Cache their insertions only
-    # within that layout, so another ROM, font or script edit is measured afresh.
-    insert_sizes = {} if insert_sizes is None else insert_sizes
-    width = 0
-
-    for token, glyph in iter_text_tokens(b):
-        # Runtime insertions have no single font glyph. Reserve their computed
-        # maximum width and cache it across the candidate lines of this layout.
-        if glyph == "name":
-            if token not in insert_sizes:
-                insert_sizes[token] = measure_insertion_width(rom, token)
-
-            width += insert_sizes[token]
-        # Commands and terminators contribute no glyph advance; literal glyphs
-        # use the same proportional or fixed-font measurement as compilation.
-        elif isinstance(glyph, int) and glyph >= 0:
-            width += measure_glyph_advance(rom, glyph)
-
-    return width
 
 
 def wrap_text(
@@ -275,7 +116,11 @@ def wrap_text(
             cur = para[: len(para) - len(body)] + words[0] if body else ""
             for word in words[1:]:
                 cand = word if not cur else cur + " " + word
-                if cur and measure_text_width(rom, encode_vwf_line(cand), insert_sizes) > max_w:
+                if (
+                    cur
+                    and measure_text.measure_text_width(rom, encode_vwf_line(cand), insert_sizes)
+                    > max_w
+                ):
                     lines.append(cur)
                     cur = word
                 else:
@@ -298,7 +143,7 @@ def wrap_text(
 
     for p in pages:
         for line in p:
-            w = measure_text_width(rom, encode_vwf_line(line), insert_sizes)
+            w = measure_text.measure_text_width(rom, encode_vwf_line(line), insert_sizes)
             if not (w <= max_w):
                 raise AssertionError(f"word too wide ({w}px): {line!r}")
 
@@ -381,11 +226,11 @@ def encode_menu_layout(
 
         # Pad to the marker's pixel position using four-pixel spaces, then
         # one-pixel FCF3 spacers for the remainder.
-        n, r = divmod(target - x, SPACEW)
+        n, r = divmod(target - x, measure_text.SPACEW)
         out += bytes([1]) * n + bytes([0xFC, 0xF3]) * r  # FCF3 = 1px space (see asm/vwf.asm)
         x = target
         b = encode_text(item)
-        x += measure_text_width(rom, b)
+        x += measure_text.measure_text_width(rom, b)
         out += b
 
         # Each label ends before the next marker, or before the supplied row
@@ -503,8 +348,8 @@ def insert_translations(
             laid = encode_text(text)
         elif mode == "c":  # centered banner (location names): center within 240px
             b = encode_text(text)
-            pad = max(0, (240 - measure_text_width(rom, b)) // 2)
-            n, r = divmod(pad, SPACEW)
+            pad = max(0, (240 - measure_text.measure_text_width(rom, b)) // 2)
+            n, r = divmod(pad, measure_text.SPACEW)
             laid = bytes([1]) * n + bytes([0xFC, 0xF3]) * r + b
         elif mode == "m":
             laid = encode_menu_layout(rom, text, msg[4] if len(msg) > 4 else None)

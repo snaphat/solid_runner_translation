@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from core.text import insert_text as text_insertion
+from core.text import measure_text
 from core.text.insert_text import CompleteInsertionRecord
 
 # System-text windows classified by original entry offset. Each (name, lo, hi)
@@ -192,7 +193,7 @@ def validate_combat_captions(
             errors.append(f"{start:06X}: {error}")
             continue
 
-        if any(token in (b"\x00", b"\xfd") for token, _ in text_insertion.iter_text_tokens(laid)):
+        if any(token in (b"\x00", b"\xfd") for token, _ in measure_text.iter_text_tokens(laid)):
             errors.append(f"{start:06X}: combat caption must fit one {limit}px line: {text!r}")
 
     if errors:

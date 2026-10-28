@@ -24,6 +24,7 @@ from typing import TypedDict
 
 from core.text import encode_text as text_encoding
 from core.text import insert_text as text_insertion
+from core.text import measure_text
 from core.text import measure_text_windows as windows
 from core.text.read_text_tokens import parse_encoded_text as parse_encoded_text
 from core.text.read_translation_files import TextMode, TranslationEntry
@@ -248,10 +249,7 @@ def encode_entry_layout(
 
     # Banner centering adds padding during insertion; this width check concerns
     # the unpadded text. Banners and fixed records retain their authored breaks.
-    if (
-        mode == "c"
-        and text_insertion.measure_text_width(rom, text_encoding.encode_text(text)) > 240
-    ):
+    if mode == "c" and measure_text.measure_text_width(rom, text_encoding.encode_text(text)) > 240:
         out.append("Banner exceeds 240px")
     if mode in "fc":
         return text_encoding.encode_text(text)
