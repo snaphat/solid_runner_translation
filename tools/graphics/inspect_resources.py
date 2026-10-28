@@ -21,7 +21,8 @@ from pathlib import Path
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.graphics.compress_graphics import iter_resource_blocks, write_tile_sheet
+from core.graphics.compress_graphics import iter_resource_blocks
+from core.graphics.write_tile_sheet import write_tile_sheet
 from core.rom import load_original_rom as original_rom
 
 
