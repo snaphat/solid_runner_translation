@@ -9,8 +9,9 @@ the game's color palettes. The caller supplies decoded tile bytes and a destinat
 from __future__ import annotations
 
 import os
-from typing import Literal, cast
+from typing import Literal
 
+from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics import convert_tiles
 from core.graphics import write_png as png
 
@@ -21,9 +22,9 @@ def write_tile_sheet(
     """
     Write 8x8 tiles as a grayscale PNG sheet, drawn at twice their size.
 
-    Empty data produces no file. Unused cells in the final row are black.
-    Palette indices are mapped to evenly spaced grayscale values, and each
-    source pixel is repeated twice horizontally and vertically.
+    Empty data produces no file. Unused cells in the final row are black. Palette indices are
+    mapped to evenly spaced grayscale values, and each source pixel is repeated twice
+    horizontally and vertically.
 
     Args:
         data (bytes | bytearray): Planar tile bytes to render; not
@@ -37,12 +38,11 @@ def write_tile_sheet(
 
     Raises:
         TypeError: If data is not bytes or bytearray.
-        ValueError: If bpp or cols is invalid, or data ends with an incomplete tile. Both
-            options require integers; booleans are rejected.
+        ValueError: If bpp is neither 2 nor 4, cols is not positive, either option is not an
+            integer, or data ends with an incomplete tile. Boolean options are rejected.
         OSError: If the destination file cannot be written.
     """
-    if not isinstance(cast(object, data), (bytes, bytearray)):
-        raise TypeError("Expected bytes or bytearray data")
+    require_byte_buffer(data, (bytes, bytearray))
     if type(bpp) is not int or type(cols) is not int or bpp not in (2, 4) or cols <= 0:
         raise ValueError("Tile sheets require 2/4bpp and a positive column count")
     if len(data) % (8 * bpp):
