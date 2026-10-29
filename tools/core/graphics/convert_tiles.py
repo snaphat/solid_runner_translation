@@ -9,7 +9,9 @@ buffer length.
 
 from __future__ import annotations
 
-from typing import Literal, Sequence, cast
+from typing import Literal, Sequence
+
+from core.files.validate_binary_buffers import require_byte_buffer
 
 
 def get_pixels(data: bytes | bytearray, t: int, bpp: Literal[2, 4] = 4) -> list[list[int]]:
@@ -30,8 +32,7 @@ def get_pixels(data: bytes | bytearray, t: int, bpp: Literal[2, 4] = 4) -> list[
         ValueError: bpp is not integer 2 or 4, or t is not an integer identifying
             a complete tile. Booleans are rejected.
     """
-    if not isinstance(cast(object, data), (bytes, bytearray)):
-        raise TypeError("Expected bytes or bytearray data")
+    require_byte_buffer(data, (bytes, bytearray))
     if type(bpp) is not int or bpp not in (2, 4):
         raise ValueError("Tile depth must be 2 or 4 bits per pixel")
     tile_bytes = 8 * bpp
@@ -70,8 +71,7 @@ def put_pixels(data: bytearray, t: int, px: Sequence[Sequence[int]]) -> None:
     """
     # Validate the whole matrix before the first write; a malformed late row
     # must not leave the destination tile partly replaced.
-    if not isinstance(cast(object, data), bytearray):
-        raise TypeError("Expected bytearray data")
+    require_byte_buffer(data, (bytearray,))
     if type(t) is not int or t < 0 or (t + 1) * 32 > len(data):
         raise ValueError("Tile index must identify a complete 4bpp tile")
     if len(px) != 8 or any(len(row) != 8 for row in px):

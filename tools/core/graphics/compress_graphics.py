@@ -21,21 +21,7 @@ from __future__ import annotations
 import collections
 import functools
 
-
-def _require_byte_buffer(data: object, accepted: tuple[type[bytes] | type[bytearray], ...]) -> None:
-    """
-    Reject values outside a reader or writer's supported byte-buffer types.
-
-    Args:
-        data (object): Resource or destination buffer supplied by the caller.
-        accepted (tuple[type[bytes] | type[bytearray], ...]): Allowed buffer classes;
-            bytes is immutable and bytearray supports in-place writes.
-
-    Raises:
-        TypeError: data is not an instance of an accepted buffer class.
-    """
-    if not isinstance(data, accepted):
-        raise TypeError("Expected " + " or ".join(kind.__name__ for kind in accepted) + " data")
+from core.files.validate_binary_buffers import require_byte_buffer
 
 
 def decompress(
@@ -66,7 +52,7 @@ def decompress(
         TypeError: rom is not bytes or bytearray.
         ValueError: off or limit is not a nonnegative integer; booleans are rejected.
     """
-    _require_byte_buffer(rom, (bytes, bytearray))
+    require_byte_buffer(rom, (bytes, bytearray))
     if type(off) is not int or type(limit) is not int or off < 0 or limit < 0:
         raise ValueError("Resource offset and decoded-byte limit must be nonnegative integers")
     out = bytearray()
@@ -122,7 +108,7 @@ def compress(data: bytes | bytearray) -> bytes:
     Raises:
         TypeError: data is not bytes or bytearray.
     """
-    _require_byte_buffer(data, (bytes, bytearray))
+    require_byte_buffer(data, (bytes, bytearray))
     out = bytearray()
     lit = bytearray()
 
@@ -189,7 +175,7 @@ def compress_optimal(data: bytes) -> bytes:
     # Validate before looking up the cache: a hashable memoryview compares equal
     # to bytes and could otherwise hit an existing entry without being checked.
     # Conversion then gives the cache an immutable, ordinary bytes key.
-    _require_byte_buffer(data, (bytes,))
+    require_byte_buffer(data, (bytes,))
     return _compress_optimal_cached(bytes(data))
 
 
@@ -298,7 +284,7 @@ def decompress_bytes(src: bytes | bytearray, *, require_complete: bool = False) 
     # bound. The bounded scanner remains the single compression-format decoder.
     if type(require_complete) is not bool:
         raise TypeError("require_complete must be a boolean")
-    _require_byte_buffer(src, (bytes, bytearray))
+    require_byte_buffer(src, (bytes, bytearray))
     decoded, end = decompress(0, limit=len(src) * 130, rom=src)
     if decoded is None:
         raise IndexError("Compressed stream is unterminated or has an invalid backreference")

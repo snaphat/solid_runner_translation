@@ -12,8 +12,9 @@ mutable destination; neither function reads files.
 
 from __future__ import annotations
 
-from typing import Sequence, cast
+from typing import Sequence
 
+from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics import compress_graphics, read_resources
 from core.rom.convert_addresses import convert_file_offset_to_snes
 
@@ -154,8 +155,7 @@ def write_resource_group(
             destination ROM does not contain the complete allocation, or a
             packed block contains bytes after its terminator.
     """
-    if not isinstance(cast(object, rom), bytearray):
-        raise TypeError("Expected bytearray data")
+    require_byte_buffer(rom, (bytearray,))
     if type(clear_tail) is not bool:
         raise TypeError("clear_tail must be a boolean")
     table = read_resources.read_bank_resource_table(bank, rom=source)

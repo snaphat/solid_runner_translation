@@ -10,8 +10,9 @@ supplies decoded tile bytes and a destination path.
 from __future__ import annotations
 
 import os
-from typing import Literal, cast
+from typing import Literal
 
+from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics import convert_tiles
 from core.graphics import write_png as png
 
@@ -41,8 +42,7 @@ def write_tile_sheet(
             Both options require integers; booleans are rejected.
         OSError: The destination file cannot be written.
     """
-    if not isinstance(cast(object, data), (bytes, bytearray)):
-        raise TypeError("Expected bytes or bytearray data")
+    require_byte_buffer(data, (bytes, bytearray))
     if type(bpp) is not int or type(cols) is not int or bpp not in (2, 4) or cols <= 0:
         raise ValueError("Tile sheets require 2/4bpp and a positive column count")
     if len(data) % (8 * bpp):
