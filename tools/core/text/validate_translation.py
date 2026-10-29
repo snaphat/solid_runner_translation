@@ -221,75 +221,94 @@ def encode_entry_layout(
     rom: bytes | bytearray,
     c: EntryLayout,
     out: list[str],
+    *,
+    name_width: int | None = None,
 ) -> bytes | bytearray:
     """
     Encode text for validation using the compiler's wrapping and menu layout helpers.
 
     Menu entries receive column positioning. Dialogue receives word wrapping and pages of at
-    most three rows. Other wrapped text has no automatic page breaks; fixed text and centered
-    banners are encoded directly. Banner centering padding and text relocation are added later
-    by the compiler and are absent from this result. Font measurements come from the supplied
-    ROM. The returned bytes are inspected by the validator rather than written into it.
+    most three rows. Other wrapped text has no automatic page breaks; fixed text and
+    centered banners are encoded directly. Banner centering padding and text relocation are
+    added later by the compiler and are absent from this result. Font measurements come from
+    the supplied ROM. The returned bytes are inspected by the validator rather than written
+    into it.
 
     Args:
-        text (str): English translation with embedded commands and any explicit newline,
-            page-break or menu-column markup.
-        rom (bytes | bytearray): ROM containing the font tables used to measure glyphs and
-            runtime name/number insertions.
-        c (EntryLayout): Entry layout constraints. mode selects the encoding strategy; width
-            sets the wrapping or menu-column allowance.
-        out (list[str]): Existing validation diagnostics. A centered banner exceeding 240 pixels
-            appends a message to this list.
+        text (str): English translation with embedded commands and any explicit
+            newline, page-break or menu-column markup.
+        rom (bytes | bytearray): ROM containing the font tables used to
+            measure glyphs and runtime name/number insertions.
+        c (EntryLayout): Entry layout constraints. mode selects the encoding strategy;
+            width sets the wrapping or menu-column allowance.
+        out (list[str]): Existing validation diagnostics. A centered banner
+            exceeding 240 pixels appends a message to this list.
+        name_width (int | None, optional): Pixel reservation for F8/12 and F8/18
+            item/opponent-name commands. Use the same nonnegative value supplied
+            to insert_translations() so validation and compilation produce the
+            same line breaks and menu positions. None is allowed when this
+            layout does not need to measure an inserted item/opponent name.
 
     Returns:
-        bytes | bytearray: Encoded text with the selected line breaks, page breaks and column
-            padding.
+        bytes | bytearray: Encoded text with the selected line breaks,
+            page breaks and column padding.
 
     Raises:
-        KeyError: If a source character has no encoding or the constraints omit mode or width.
-        ValueError: If brace markup, menu columns, a width or a measured font record is invalid,
-            or a runtime-name insertion cannot be measured from the system collection.
+        KeyError: If a source character has no game encoding.
+        ValueError: If markup cannot be encoded, a width or menu column is invalid, a font
+            record cannot be measured, or an inserted item or opponent name has no supplied
+            width.
         AssertionError: If a word or menu label does not fit its assigned width.
-        OSError: If a system translation source needed for name measurement cannot be read.
     """
     mode = c["mode"]
 
+    # Use the same name reservation as ROM insertion. Otherwise validation could
+    # accept a shorter line layout than the compiler will actually produce.
     # Menus encode explicit column positions instead of wrapping ordinary prose.
     if mode == "m":
-        return layout_text.encode_menu_layout(rom, text, c["width"])
+        return layout_text.encode_menu_layout(rom, text, c["width"], name_width=name_width)
 
     # Banner centering adds padding during insertion; this width check concerns
     # the unpadded text. Banners and fixed records retain their authored breaks.
-    if mode == "c" and measure_text.measure_text_width(rom, text_encoding.encode_text(text)) > 240:
+    if (
+        mode == "c"
+        and measure_text.measure_text_width(
+            rom, text_encoding.encode_text(text), name_width=name_width
+        )
+        > 240
+    ):
         out.append("Banner exceeds 240px")
     if mode in "fc":
         return text_encoding.encode_text(text)
 
     # Use the compiler's wrapper so byte and line checks see its actual breaks.
     # Only dialogue mode may introduce automatic page breaks.
-    return layout_text.wrap_text(rom, text, c["width"] or 236, paginate=mode == "v")
+    return layout_text.wrap_text(
+        rom, text, c["width"] or 236, paginate=mode == "v", name_width=name_width
+    )
 
 
-def validate_translation_entry(e: TranslationEntry, rom: bytes | bytearray) -> list[str]:
+def validate_translation_entry(
+    e: TranslationEntry, rom: bytes | bytearray, *, name_width: int | None = None
+) -> list[str]:
     """
     Report source, command, byte-capacity and layout violations for one translation.
-
-    Encoding and layout failures become returned diagnostics. File-access errors from
-    loading system names propagate instead of becoming diagnostics.
 
     Args:
         e (TranslationEntry): Source text, original slot bounds and optional
             layout/control metadata.
         rom (bytes | bytearray): Candidate ROM used to check encoded text
             and window fit.
+        name_width (int | None, optional): Pixel width reserved during compilation
+            for an inserted item/opponent name. Supply the nonnegative result of
+            measure_text.measure_name_width() using the candidate ROM font.
+            Layout checks use this value when testing the entry's fit. None is
+            allowed when the layout needs no item/opponent-name measurement;
+            otherwise the returned diagnostics report the missing width.
 
     Returns:
         list[str]: Validation diagnostics; empty when all entry constraints
             pass.
-
-    Raises:
-        OSError: If a system translation source needed to measure an inserted item
-            or opponent name cannot be read.
     """
     text = e["en"]
     try:
@@ -397,7 +416,7 @@ def validate_translation_entry(e: TranslationEntry, rom: bytes | bytearray) -> l
         # Measure the encoded layout, including automatic wrapping. Inspect
         # tokens rather than raw zero bytes so command payloads cannot be
         # mistaken for newline tokens.
-        laid = encode_entry_layout(text, rom, c, out)
+        laid = encode_entry_layout(text, rom, c, out, name_width=name_width)
         tokens = parse_encoded_text(laid)
 
         # A standalone 00 byte advances to the next displayed row.

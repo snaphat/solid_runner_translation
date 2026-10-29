@@ -1,25 +1,22 @@
 """
 This module writes translated text and updates its game references in a supplied ROM buffer.
 
-insert_translations() takes a mutable 4 MiB ROM and records containing each
-translation's original start/end offsets, English string, layout mode, and
-optional width or pointer locations. It encodes and lays out the text, allocates
-space for strings that need relocation, writes them, and updates text jumps,
-16-bit pointers, or address operands so the game can read the new strings.
-It modifies the supplied buffer and returns the dialogue allocation cursor;
-it does not save the finished ROM. Runtime item/opponent insertions can load
-system translations to reserve enough display width. ROM-space
-reservations are managed by core.rom.allocate_space.
+insert_translations() takes a mutable 4 MiB ROM and records containing each translation's
+original start/end offsets, English string, layout mode, and optional width or pointer
+locations. It encodes and lays out the text, allocates space for strings that need relocation,
+writes them, and updates text jumps, 16-bit pointers, or address operands so the game can read
+the new strings. It modifies the supplied buffer and returns the dialogue allocation cursor; it
+does not read translation files or save the finished ROM. ROM-space reservations are managed by
+core.rom.allocate_space.
 
-The original writable slot is [start, end); end identifies the existing
-terminator and is excluded. Ordinary relocated dialogue jumps back to that
-terminator. Names and strings reached through retargeted references can have
-their own FF terminator. Fixed records, menus, centered text, and short slots
-use separate encoding or placement rules.
+The original writable slot is [start, end); end identifies the existing terminator and is
+excluded. Ordinary relocated dialogue jumps back to that terminator. Names and strings reached
+through retargeted references can have their own FF terminator. Fixed records, menus, centered
+text, and short slots use separate encoding or placement rules.
 
-Text wrapping and menu positioning use core.text.layout_text; pixel widths
-come from core.text.measure_text. Dialogue page boundaries use FD followed by
-event opcode 18, with a segment left in the original slot for each page.
+Text wrapping and menu positioning use core.text.layout_text; pixel widths come from
+core.text.measure_text. Dialogue page boundaries use FD followed by event opcode 18, with a
+segment left in the original slot for each page.
 """
 
 from __future__ import annotations
@@ -70,6 +67,8 @@ def insert_translations(
     rom: bytearray,
     messages: Iterable[InsertionRecord],
     bank_free: dict[int, list[int]] | None = None,
+    *,
+    name_width: int | None = None,
 ) -> int:
     """
     This function writes English text into the supplied ROM buffer and updates the addresses the game uses to read it.
@@ -108,6 +107,12 @@ def insert_translations(
         bank_free (dict[int, list[int]] | None, optional): Shared bank-tail
             [next-free, end] cursors; None starts an independent allocation
             pass.
+        name_width (int | None, optional): Width of the longest translated name
+            the game can insert into this text. Measure it once with
+            measure_text.measure_name_width() after installing the ROM font.
+            Wrapping, centering, and menu positioning reserve that many pixels
+            for each F8/12 or F8/18 command. Supply a nonnegative integer; None
+            is allowed when the entries need no item/opponent-name measurement.
 
     Returns:
         int: Final VWF allocator file offset; other allocator cursors are not
@@ -115,16 +120,13 @@ def insert_translations(
 
     Raises:
         ValueError: If the candidate is not a 4 MiB ROM, or a slot, layout mode, width or
-            reference operand is invalid, or source markup, encoded tokens, a measured font
-            record or a system translation source is invalid.
-        AssertionError: If allocation, original-slot capacity or native pagination constraints
-            prevent safe insertion. Paginated dialogue requires room for native segments in its
-            original slot and cannot use a standalone payload reached through retargeted
-            references.
+            reference operand is invalid, or a required system-name width is absent or invalid,
+            or encoded markup/tokens are malformed.
         KeyError: If a source character has no game encoding.
-        OSError: If a system translation source used to measure an inserted name cannot be read.
-        UnicodeError: If a system translation source used to measure an inserted name is not
-            valid UTF-8.
+        AssertionError: If allocation fails, the original text slot is too small, or the
+            inserted pages cannot retain the segments required by the game. Paginated dialogue
+            requires room for native segments in its original slot and cannot use a standalone
+            payload reached through retargeted references.
     """
     # Use separate allocators for proportional text, fixed text and short
     # jump targets because the reader chooses its font and address rules by bank.
@@ -170,18 +172,28 @@ def insert_translations(
         width = msg[4] if len(msg) > 4 else (layout_text.MAX_W if mode == "v" else 216)
         laid: bytes | bytearray
 
+        # Centering, menu columns, and wrapping all use the caller's name
+        # reservation so inserted names affect placement before bytes are stored.
         if mode == "f":
             laid = encode_text(text)
         elif mode == "c":  # centered banner (location names): center within 240px
             b = encode_text(text)
-            pad = max(0, (240 - measure_text.measure_text_width(rom, b)) // 2)
+            pad = max(
+                0, (240 - measure_text.measure_text_width(rom, b, name_width=name_width)) // 2
+            )
             n, r = divmod(pad, measure_text.SPACEW)
             laid = bytes([1]) * n + bytes([0xFC, 0xF3]) * r + b
         elif mode == "m":
-            laid = layout_text.encode_menu_layout(rom, text, msg[4] if len(msg) > 4 else None)
+            laid = layout_text.encode_menu_layout(
+                rom, text, msg[4] if len(msg) > 4 else None, name_width=name_width
+            )
         else:
             laid = layout_text.wrap_text(
-                rom, text, width if width is not None else layout_text.MAX_W, paginate=(mode == "v")
+                rom,
+                text,
+                width if width is not None else layout_text.MAX_W,
+                paginate=(mode == "v"),
+                name_width=name_width,
             )  # 'p' and 'n': no pages
 
         # Select the text jump, pointer, or address operand used to reach the payload. The original slot

@@ -722,3 +722,52 @@ def hash_collection_files(
     return hashlib.sha256(
         b"".join(p.read_bytes() for p in resolve_collection_paths(name, folder))
     ).hexdigest()
+
+
+def load_names_for_dialogue_layout(folder: str | os.PathLike[str] | None = None) -> list[str]:
+    """
+    Load translated names used to reserve space for names inserted into dialogue.
+
+    Some dialogue commands insert an item or opponent name during gameplay. The chosen name can
+    vary, so word wrapping needs room for the widest name that could appear. This function
+    supplies the names for that calculation.
+
+    The function reads system.txt and meta/system.json from the translation directory and
+    selects entries marked mode n, which identifies name records. It excludes entries whose
+    skip field is true or contains an exclusion reason, and entries with no English text.
+    Every remaining name record contributes to the candidate list. load() checks collection
+    IDs, metadata, and nonblank active English before this selection. Encoding and name-copy restrictions are not checked
+    here; measure_name_width() rejects candidates containing controls or unsupported characters
+    when it measures them.
+
+    measure_text.measure_name_width(rom, names) measures the returned strings with the
+    candidate ROM's font. Its result supplies name_width to layout or insertion. This loader
+    reads the source files but does not measure the names itself.
+
+    Args:
+        folder (str | os.PathLike[str] | None, optional): Directory containing
+            system.txt and meta/system.json. None uses the repository's
+            translation/ directory. Relative paths remain relative to the working
+            directory; an empty string selects that directory. Bytes and booleans
+            are invalid.
+
+    Returns:
+        list[str]: English text from the selected name records, in source order.
+            Duplicate strings are retained. An empty list means no records met
+            the selection rules; measure_name_width() rejects that empty list.
+
+    Raises:
+        TypeError: If folder is not None, a string, or a path-like object returning a string.
+        ValueError: If readable text or JSON metadata is malformed, their entry IDs disagree, or
+            a non-skipped translation has blank English text.
+        OSError: If either source file cannot be read.
+        UnicodeError: If a source file is not valid UTF-8.
+    """
+    # Name records share the system collection with prose and interface text.
+    # Mode n selects the strings copied as names. Retain every eligible name
+    # because the item/opponent chosen during gameplay is not yet known.
+    return [
+        entry["en"]
+        for entry in load("system", folder)
+        if entry.get("mode") == "n" and entry.get("en") and not entry.get("skip")
+    ]
