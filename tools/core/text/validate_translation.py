@@ -23,8 +23,8 @@ import unicodedata
 from typing import TypedDict
 
 from core.text import encode_text as text_encoding
+from core.text import get_text_limits as text_limits
 from core.text import layout_text, measure_text
-from core.text import measure_text_windows as windows
 from core.text.read_text_tokens import parse_encoded_text as parse_encoded_text
 from core.text.read_text_tokens import split_dialogue_pages
 from core.text.read_translation_files import TextMode, TranslationEntry
@@ -201,10 +201,10 @@ def derive_entry_layout_constraints(e: TranslationEntry) -> EntryLayout:
     # finite visible area, so their line allowance comes from the window table
     # or max_lines metadata rather than automatic pagination.
     # The original text address identifies known window types and their row limits.
-    category = windows.classify_text_window(int(e["id"], 16))
+    category = text_limits.classify_text_window(int(e["id"], 16))
     lines = 3 if mode == "v" else None
     if mode == "p" and category:
-        lines = windows.LINE_LIMIT.get(category, e["jp"].count("\n") + 1)
+        lines = text_limits.LINE_LIMIT.get(category, e["jp"].count("\n") + 1)
     if mode in ("p", "c"):
         lines = e.get("max_lines", lines)
 

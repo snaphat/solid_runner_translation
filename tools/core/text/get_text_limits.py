@@ -1,22 +1,20 @@
 """
-This module supplies text display limits and checks that battle captions fit on one line.
+This module supplies display limits and classifies text entries by original ROM offset.
 
-The tables map original-ROM text offsets to categories such as item descriptions,
-job reports, and chapter headings, with width and row limits for their displays.
-Layout validation uses these limits when checking English translations.
+The tables describe known text categories, default and overridden line widths,
+and visible row limits. classify_text_window() identifies a system-text category;
+is_combat_caption() identifies entries using the single-line battle strip.
+Layout validation and screenshot checks use these classifications.
 
-validate_combat_captions() takes ROM font bytes and translation insertion
-records, measures and wraps each battle caption, and raises ValueError if any
-caption exceeds its width or contains a line or page break. It returns the
-number of captions checked and does not change the ROM or inspect screenshots.
+estimate_japanese_line_width() estimates source-line width from character counts
+and a fixed given-name reservation. It does not use ROM font bitmaps. The module
+contains lookup data and helpers; it does not wrap text or modify ROM bytes.
 """
 
 from __future__ import annotations
 
-from typing import Iterable
-
-from core.text import layout_text, measure_text
-from core.text.insert_text import CompleteInsertionRecord
+# Maximum unheadered image size supported by the standard LoROM mapping.
+ROM_CAPACITY = 0x400000
 
 # System-text windows classified by original entry offset. Each (name, lo, hi)
 # covers a half-open ROM file-offset range; its category selects layout limits.
@@ -81,17 +79,40 @@ def estimate_japanese_line_width(line: str) -> int:
     return sum(8 if c.isascii() else 12 for c in line.replace("{名}", "XXXXX"))
 
 
+def _validate_rom_offset(offset: int) -> None:
+    """
+    Require a byte offset within standard LoROM capacity.
+
+    Args:
+        offset (int): Zero-based file offset in an unheadered ROM.
+
+    Raises:
+        TypeError: offset is not an integer or is a boolean.
+        ValueError: offset is negative or at least ROM_CAPACITY.
+    """
+    if type(offset) is not int:
+        raise TypeError("Text offset must be an integer; booleans are not offsets")
+    if not 0 <= offset < ROM_CAPACITY:
+        raise ValueError("Text offset must lie within the 4 MiB LoROM address range")
+
+
 def classify_text_window(a: int) -> str | None:
     """
     Find the known system-text category for a ROM file offset.
 
     Args:
-        a (int): Original text-entry file offset.
+        a (int): Original text-entry file offset from 0 through 0x3FFFFF.
+            Booleans and other nonintegers are rejected.
 
     Returns:
         str | None: Known system-text window category, or None outside
             categorized ranges.
+
+    Raises:
+        TypeError: a is not an integer or is a boolean.
+        ValueError: a is outside standard LoROM capacity.
     """
+    _validate_rom_offset(a)
     for name, lo, hi in CATS:
         if lo <= a < hi:
             return name
@@ -104,63 +125,20 @@ def is_combat_caption(offset: int) -> bool:
     Check whether an original slot uses the combat caption strip.
 
     Args:
-        offset (int): Zero-based byte offset in the unheadered ROM.
+        offset (int): Zero-based byte offset from 0 through 0x3FFFFF in the
+            unheadered ROM. Booleans and other nonintegers are rejected.
 
     Returns:
         bool: Whether the slot uses the single-line combat caption strip.
+
+    Raises:
+        TypeError: offset is not an integer or is a boolean.
+        ValueError: offset is outside standard LoROM capacity.
     """
+    _validate_rom_offset(offset)
     return (
         0x085CBF <= offset <= 0x0863C1
         or 0x019B79 <= offset <= 0x019C0C
         or 0x08646D <= offset <= 0x086494
         or offset in (0x080366, 0x086715, 0x086733)
     )
-
-
-def validate_combat_captions(
-    rom: bytes | bytearray, messages: Iterable[CompleteInsertionRecord]
-) -> int:
-    """
-    Reject wrapping and page breaks before writing an English ROM.
-
-    Measures runtime insertions against the candidate font and preserves the
-    four-pixel margin within the 240-pixel strip.
-
-    Args:
-        rom (bytes | bytearray): Candidate ROM containing the installed
-            caption font.
-        messages (Iterable[CompleteInsertionRecord]): Compiler insertion records, with start
-            offset and English text.
-
-    Returns:
-        int: Number of combat-caption entries checked successfully.
-
-    Raises:
-        ValueError: A combat caption wraps, contains a page break, or exceeds
-            its strip allowance.
-    """
-    errors: list[str] = []
-    checked = 0
-
-    for start, _, text, _, width, _, _ in messages:
-        if not is_combat_caption(start):
-            continue
-
-        checked += 1
-
-        # The combat renderer has no second caption row. Enforce both the entry
-        # width and the global strip width before rejecting any resulting line/page break.
-        limit = min(width if width is not None else layout_text.MAX_W, layout_text.MAX_W)
-        try:
-            laid = layout_text.wrap_text(rom, text, limit, paginate=False)
-        except AssertionError as error:
-            errors.append(f"{start:06X}: {error}")
-            continue
-
-        if any(token in (b"\x00", b"\xfd") for token, _ in measure_text.iter_text_tokens(laid)):
-            errors.append(f"{start:06X}: combat caption must fit one {limit}px line: {text!r}")
-
-    if errors:
-        raise ValueError("Combat caption layout failed:\n" + "\n".join(errors))
-
-    return checked

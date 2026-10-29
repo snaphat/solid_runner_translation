@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from core.text.measure_text_windows import is_combat_caption
+from core.text.get_text_limits import ROM_CAPACITY, is_combat_caption
 
 
 def get_capture_window(entry: str) -> tuple[int, int, tuple[int, int, int]]:
@@ -44,7 +44,7 @@ def get_capture_window(entry: str) -> tuple[int, int, tuple[int, int, int]]:
     # These are framebuffer pixel origins and per-channel brightness cutoffs,
     # not text-storage sizes. Different overlays use different colors and positions.
     n = int(entry, 16)
-    if is_combat_caption(n):
+    if n < ROM_CAPACITY and is_combat_caption(n):
         return 8, 200, (150, 150, 120)  # battle caption strip
 
     if n in (0x169A7E, 0x16E1C5, 0x0B97F6):
