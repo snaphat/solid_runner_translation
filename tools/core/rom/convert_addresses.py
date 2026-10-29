@@ -20,9 +20,9 @@ def convert_snes_to_file(pointer: int) -> int:
     """
     Convert a packed SNES bus address to an unheadered LoROM file offset.
 
-    The high bank bit and address bit 15 are discarded as ROM mirror bits.
-    This conversion does not establish that the address selects ROM rather
-    than RAM or I/O.
+    The high bank bit and address bit 15 are mirrors and are discarded. This
+    normalization does not establish that the bus address actually selects ROM;
+    RAM and register addresses must be excluded by the caller.
 
     Args:
         pointer (int): Packed SNES bus address, from 0x000000 through 0xFFFFFF.
@@ -45,8 +45,9 @@ def convert_pointer_bytes_to_file(lo: int, hi: int, bank: int) -> int:
     """
     Convert separate low, high, and bank address bytes to a ROM file offset.
 
-    The caller supplies bytes already read from the ROM. They need not be
-    adjacent; this function packs their values and applies the LoROM mapping.
+    The bytes need not be adjacent in the source ROM. This helper packs values
+    already read by the caller, then applies convert_snes_to_file() and its
+    mirror handling; it does not read instruction operands itself.
 
     Args:
         lo (int): Low address byte, 0-255.

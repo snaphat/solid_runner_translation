@@ -1,11 +1,12 @@
 """
 This module validates translated battle captions against the single-line caption strip.
 
-validate_combat_captions() selects caption records by their original ROM offsets,
-wraps their English text using the candidate font, and rejects line breaks,
-page breaks, embedded stream terminators, and text wider than the strip. Each
-record's width can impose a smaller limit. The function returns the number of captions checked or raises
-ValueError with collected layout failures. It does not modify the ROM.
+validate_combat_captions() selects caption records by their original ROM offsets, wraps their
+English text using the candidate font, and rejects line breaks, page breaks, embedded stream
+terminators, and text wider than the strip. Each record's width can impose a smaller limit. The
+function returns the number of captions checked or raises ValueError with collected fit/line
+failures. Malformed source or invalid arguments can fail immediately instead of being collected.
+It does not modify the ROM.
 """
 
 from __future__ import annotations
@@ -26,16 +27,17 @@ def validate_combat_captions(
     name_width: int | None = None,
 ) -> int:
     """
-    Reject multiline captions and embedded terminators before writing an English ROM.
+    This function checks that battle captions fit one row and contain no embedded text terminators.
 
-    Battle captions have one visible row. This check measures each caption with
-    the font installed in rom, allowing 236 pixels of the 240-pixel strip.
-    A record can request a smaller limit. Captions outside the known battle
-    text offsets are skipped.
+    Each caption is measured with the font installed in rom. Its width limit is at most 236
+    pixels within the 240-pixel strip; a record may request a smaller limit. Records outside
+    known battle-text offsets are skipped.
 
-    A caption can contain a command that inserts an item or opponent name.
-    The game chooses that name later. name_width reserves the pixel width of
-    the longest possible inserted name.
+    Item and opponent names are chosen during gameplay. The name_width value reserves enough
+    pixels for the longest possible inserted name. Fit failures and embedded
+    line/page/terminator tokens are collected across captions. Invalid arguments, unsupported
+    characters, and malformed source tokens raise immediately; those failures are not added to
+    the collected list.
 
     Args:
         rom (bytes | bytearray): Candidate ROM containing the installed

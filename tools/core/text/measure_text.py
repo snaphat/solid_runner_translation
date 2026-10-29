@@ -186,7 +186,12 @@ def measure_text_width(
     name_width: int | None = None,
 ) -> int:
     """
-    Measure text with worst-case dynamic insertion widths.
+    This function sums the pixel advances of encoded glyphs and inserted values.
+
+    Newlines contribute no width and do not reset the sum; separate calls are needed to measure
+    separate lines. insert_sizes caches insertion widths by command bytes. Player-name and
+    numeric widths are reused from that cache. Item/opponent-name widths are recalculated from
+    name_width on each call, replacing any cached value for those commands.
 
     The encoded text buffer is not modified. Cache updates made before a later
     measurement error remain in insert_sizes.
@@ -252,7 +257,8 @@ def measure_name_width(rom: bytes | bytearray, names: Iterable[str]) -> int:
         rom (bytes | bytearray): Font tables used to measure literal glyphs.
         names (Iterable[str]): Nonempty collection of translated names. Each
             name must contain only literal glyphs; controls and newlines are
-            rejected. Supply a collection, not a single string.
+            rejected. Supply a collection, not a single string. An explicitly
+            supplied empty name has zero advance; an empty collection is invalid.
 
     Returns:
         int: Maximum summed glyph advance among the supplied names.

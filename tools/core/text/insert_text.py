@@ -73,6 +73,16 @@ def insert_translations(
     """
     This function writes English text into the supplied ROM buffer and updates the addresses the game uses to read it.
 
+    Each record identifies an original text slot. Text that cannot remain in that slot is placed
+    in allocated ROM space; text jumps, pointers, or CPU address operands are updated to reach
+    it. The layout mode controls wrapping, pagination, and menu placement as described below.
+
+    All records' slot bounds, modes, widths, and reference locations are checked before writing
+    begins. Text encoding and space allocation then proceed one record at a time. If either
+    fails, changes already made to rom and bank_free remain in place. This function does not
+    check whether English commands match the Japanese text; validate_translation_entry()
+    performs that comparison.
+
     Layout modes:
 
         v: Wrap dialogue into pages of at most three rows and preserve event-script
@@ -115,7 +125,9 @@ def insert_translations(
             is allowed when the entries need no item/opponent-name measurement.
 
     Returns:
-        int: Final VWF allocator file offset; other allocator cursors are not
+        int: Next free offset in the proportional-text allocator after insertion.
+            With no proportional allocation, this is the first FREE_REGIONS start.
+            This is not a byte count or ROM size; other allocator cursors are not
             included.
 
     Raises:

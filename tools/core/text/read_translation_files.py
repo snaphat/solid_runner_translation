@@ -1,13 +1,12 @@
 """
 This module loads and saves translation entries using editable text files paired with JSON storage and layout metadata.
 
-load() reads translation/<name>.txt and translation/meta/<name>.json, checks
-that their entry IDs agree, validates the metadata fields, and returns entry
-dictionaries combining Japanese, English, notes, and storage/layout settings.
-The collections are events, system, and additions. save() formats both files
-before replacing either and uses replace_many() to restore earlier contents
-if a later replacement fails. Formatting helpers also return text without
-writing files.
+load() reads translation/<name>.txt and translation/meta/<name>.json, checks that their entry
+IDs agree, validates the metadata fields, and returns entry dictionaries combining Japanese,
+English, notes, and storage/layout settings. The collections are events, system, and additions.
+save() formats both files before replacing either and uses replace_many() to restore earlier
+contents if a later replacement fails. Formatting helpers also return text without writing
+files.
 
 The readable file stores one block per original-ROM text offset:
 
@@ -16,14 +15,14 @@ The readable file stores one block per original-ROM text offset:
     #NOTE optional reviewer note
     The enemy creature is inactive.
 
-English occupies the lines after the initial # lines. Blocks are separated
-by a blank line before the next #### header. A trailing | protects whitespace
-or a literal final | and is removed on load. The source writes page breaks
-as \\f, carriage returns as \\r, and literal backslashes as \\\\.
+English occupies the lines after the initial # lines. Blocks are separated by a blank line
+before the next #### header. A trailing | protects whitespace or a literal final | and is
+removed on load. The source writes page breaks as \\f, carriage returns as \\r, and literal
+backslashes as \\\\.
 
-JSON entries use the same IDs and hold fields such as end, mode, w, ptrs, imm,
-and skip. These specify the original text slot, layout, references to update,
-and whether the entry is omitted from translation.
+JSON entries use the same IDs and hold fields such as end, mode, w, ptrs, imm, and skip. These
+specify the original text slot, layout, references to update, and whether the entry is omitted
+from translation.
 """
 
 from __future__ import annotations
@@ -512,6 +511,8 @@ def _validate_metadata(entry_id: str, metadata: dict[str, object]) -> None:
     if "name_spaces" in metadata and type(metadata["name_spaces"]) is not bool:
         raise ValueError(f"{entry_id}: name_spaces must be a boolean")
 
+    # Pointer fields store hexadecimal ROM locations. Controls store source
+    # markup strings; byte limits and menu columns store integer row values.
     for key in ("ptrs", "imm", "reviewed_controls", "fixed_line_bytes", "menu_columns"):
         if key not in metadata:
             continue

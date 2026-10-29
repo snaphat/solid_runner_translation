@@ -176,8 +176,10 @@ def encode_menu_layout(
 
     Args:
         rom (bytes | bytearray): Font tables used to fit labels between menu columns.
-        text (str): English translation text, including supported brace-delimited control
-            markup.
+        text (str): One or more newline-separated rows of @column:label pairs. Each row must
+            begin with a marker and contain no text outside its labels. Columns are nonnegative,
+            unique, and increasing; labels must be nonblank. Labels may contain brace-delimited
+            game commands.
         cells_total (int | None, optional): Positive integer number of fixed-width cells
             reserved per menu row; booleans and other nonintegers are rejected. None uses a
             99-cell final-label bound; earlier labels remain bounded by the following column

@@ -20,8 +20,10 @@ def read_bank_resource_table(bank: int, *, rom: bytes | bytearray) -> list[int] 
     """
     Read a plausible resource pointer table from a 32 KiB ROM bank.
 
-    Table words are at least $8000. The table ends where its earliest resource
-    begins.
+    Table words are at least $8000. The table ends where its earliest resource begins.
+    This checks pointer-table shape only: entries may repeat or be out of address order,
+    and pointed-to bytes are not decompressed here. Decoding is performed by
+    read_resource_block() or iter_resource_blocks().
 
     Args:
         bank (int): Zero-based 32 KiB ROM bank index, not an SNES bus-bank byte.

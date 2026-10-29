@@ -33,6 +33,12 @@ def allocate_bank_tail(
     """
     Reserve bytes from the FF-filled tail of a 32 KiB ROM bank.
 
+    The first request scans the bank's trailing FF bytes and reserves sixteen bytes before the
+    first allocation. Later requests use the offsets stored in free without rescanning, so that
+    dictionary must remain associated with the same ROM and allocation pass. A failed first
+    request may still add that bank to free, but does not advance its reservation cursor. A
+    zero-byte request returns the cursor without consuming bytes.
+
     Args:
         rom (bytes | bytearray): ROM inspected for its FF-filled bank
             tail.
@@ -87,6 +93,11 @@ class Space:
     Space reserves storage within configured ROM regions without crossing 32 KiB bank
     boundaries.
 
+    Regions are used in ascending order. A successful request consumes its bytes and any earlier
+    spans it had to skip; an unsuccessful request leaves the allocator unchanged. The allocator
+    neither examines existing ROM contents nor writes bytes. The caller must supply ranges safe
+    to overwrite.
+
     Attributes:
         free (int): Next available unheadered file offset in the active region.
         end (int): Exclusive end offset of the active region.
@@ -100,7 +111,10 @@ class Space:
 
         Args:
             regions (Iterable[tuple[int, int]]): Nonempty ordered half-open (start,
-                end) file-offset regions with integer bounds; copied before allocation.
+                end) regions with 0 <= start < end <= 0x400000. Regions must be
+                ascending and nonoverlapping; booleans are not bounds. The region
+                iterable is consumed once into a private list. Subsequent allocations
+                modify only that private list.
 
         Raises:
             ValueError: If allocation regions are empty, have noninteger bounds, are reversed or
@@ -123,6 +137,11 @@ class Space:
     def allocate(self, n: int) -> int:
         """
         Reserve n bytes and return their file offset.
+
+        If the current bank has insufficient space, allocation continues at the next bank
+        boundary, then in later configured regions. On success, earlier skipped spans are no
+        longer available through this allocator. Zero returns the current cursor without
+        advancing it.
 
         Args:
             n (int): Integer number of bytes to reserve, from 0 through 32768

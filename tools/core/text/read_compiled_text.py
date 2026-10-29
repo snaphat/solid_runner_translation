@@ -33,9 +33,10 @@ def resolve_message_start(offset: int) -> int:
     """
     Locate the insertion start in the patched layout for an original text slot.
 
-    The computer-report slot at $149B2A reserves its first byte for event
-    opcode 18, so its text begins at the following byte. Other offsets are
-    unchanged. This function assumes that layout without reading the ROM.
+    At COMPUTER ($149B2A), the patch reserves the slot's first byte for event opcode 18, so its
+    text starts at the following byte. All other offsets are unchanged. This helper assumes the
+    patched layout without reading a ROM. resolve_text_start() checks whether
+    the opcode is present in a supplied image before adjusting the offset.
 
     Args:
         offset (int): Zero-based byte offset in the unheadered ROM.
@@ -58,9 +59,9 @@ def resolve_text_start(rom: bytes | bytearray, offset: int) -> int:
     """
     Locate text after the computer slot's show-text opcode when it is present.
 
-    At $149B2A only, a leading event opcode 18 moves the text start forward
-    one byte. Other offsets are returned unchanged. The supplied ROM is read
-    to establish whether that opcode is present.
+    Only COMPUTER ($149B2A) receives special treatment, and only when its first byte is event
+    opcode 18. All other valid offsets are returned unchanged. Unlike resolve_message_start(),
+    this works without assuming the patch has already been applied.
 
     Args:
         rom (bytes | bytearray): ROM inspected for the repaired computer
@@ -88,10 +89,13 @@ def resolve_text_start(rom: bytes | bytearray, offset: int) -> int:
 
 class Reader:
     """
-    Reader checks compiled text jumps, name records, and dialogue segment boundaries.
+    Reader checks text chains in a caller-owned ROM buffer without modifying it.
 
-    The reader retains the supplied ROM buffer without changing it. Traversal failures normally
-    become returned diagnostics; invalid API arguments can raise exceptions instead.
+    trace_text_chain() locates a terminator and reports traversal failures.
+    validate_text_chain() checks that an entry reaches its required end.
+    validate_dialogue_segments() checks that text rendering and event scanning agree on each
+    dialogue segment's end. Malformed game text normally becomes a returned diagnostic;
+    programmer input errors such as a noninteger start are raised.
 
     Attributes:
         rom (Union[bytes, bytearray]): Caller-owned ROM buffer retained by reference; keep it
@@ -232,7 +236,9 @@ class Reader:
             end (int): Expected original terminator file offset; a negative value
                 requires a standalone FF terminator. Ignored in name mode n,
                 whose native copy loop always requires FF.
-            mode (str): Translation layout mode; n selects name-copy restrictions.
+            mode (str): One of v, p, n, f, m, or c. n selects name-copy
+                restrictions; the other modes share ordinary chain traversal.
+                An unsupported mode produces a diagnostic, not an exception.
 
         Returns:
             str | None: Validation diagnostic, or None when the text passes the name-copy checks
@@ -274,7 +280,9 @@ class Reader:
         at every segment.
 
         Args:
-            a (int): First dialogue segment file offset.
+            a (int): First dialogue segment file offset, at the text payload
+                after its show-text opcode (except for the special computer-slot
+                adjustment handled by resolve_text_start()).
             end (int): Required final original terminator file offset.
 
         Returns:
@@ -355,22 +363,25 @@ def decode_literal_glyphs(rom: bytes | bytearray, start: int) -> tuple[list[int]
 
 def index_page_starts(rom: bytes | bytearray) -> dict[int, tuple[str, int]]:
     """
-    Map compiled text-start offsets to translation entry IDs and dialogue page numbers.
+    This function maps compiled text starts to entry IDs and page numbers for identifying gameplay captures.
 
-    The index includes original slots and retargeted pointer/immediate starts, following
-    relocated text and page continuations. Gameplay trace readers use it to identify which
-    translated page the native text engine has started.
+    Active source entries are loaded on each call. The index includes original
+    slots, targets of updated pointers and address operands, and dialogue page
+    continuations. Original slots take precedence when another entry points to
+    the same address. Separately registered entries still begin at page one.
 
     Args:
-        rom (bytes | bytearray): Compiled ROM whose dialogue chains are indexed.
+        rom (bytes | bytearray): Compiled ROM whose dialogue chains are
+            indexed.
 
     Returns:
-        dict[int, tuple[str, int]]: Text-start offset to (entry ID, one-based page number).
+        dict[int, tuple[str, int]]: Text-start offset to (entry ID, one-based page
+            number).
 
     Raises:
-        OSError: If a translation source cannot be read.
-        ValueError: If source metadata or a stored reference is invalid.
-        IndexError: If an original slot or reference operand lies outside the ROM.
+        OSError: If a translation source file cannot be read.
+        ValueError: If source metadata or a decoded text chain is invalid.
+        IndexError: If an entry, operand, text token, or jump target is outside rom.
         KeyError: If a decoded page contains an unsupported F8 command.
     """
     entries = [
@@ -381,6 +392,8 @@ def index_page_starts(rom: bytes | bytearray) -> dict[int, tuple[str, int]]:
     ]
     # Keep the original entry ID when a reference points into an
     # independently registered entry. Register every boundary before walking.
+    # Resolve the patched computer slot before recording its entry ID so its
+    # leading event opcode cannot be mistaken for the first text glyph.
     own = {resolve_text_start(rom, int(e["id"], 16)): e["id"] for e in entries}
     for e in entries:
         for first in read_entry_references(rom, e):
@@ -581,17 +594,23 @@ def index_page_terminators(rom: bytes | bytearray) -> dict[int, tuple[str, int, 
     """
     Map translated page terminator offsets to translation entry IDs.
 
+    The function loads active records from all translation collections and resolves
+    their original and retargeted starts. walk_pages() keeps the first entry ID recorded
+    for a shared terminator and retains valid pages before a malformed segment.
+    Source-load and reference-resolution failures still propagate.
+
     Args:
-        rom (bytes | bytearray): Compiled ROM whose translated page terminators are indexed.
+        rom (bytes | bytearray): Compiled ROM whose translated page
+            terminators are indexed.
 
     Returns:
-        dict[int, tuple[str, int, int]]: Terminator offset to (entry ID, one-based page number,
-            text start).
+        dict[int, tuple[str, int, int]]: Terminator offset to (entry ID, one-based page
+            number, text start).
 
     Raises:
         OSError: If a translation source cannot be read.
-        ValueError: If source metadata or a stored reference is invalid.
-        IndexError: If an original slot or reference operand lies outside the ROM.
+        ValueError: If source metadata or a reference cannot be resolved.
+        IndexError: If an original slot or reference operand lies outside rom.
     """
     out: dict[int, tuple[str, int, int]] = {}
     starts: dict[int, str] = {}
@@ -622,7 +641,7 @@ def walk_pages(
     owners: dict[int, str] | None = None,
 ) -> None:
     """
-    Map each terminator in a text chain to its entry ID and page number.
+    This function adds a text chain's terminators to the supplied entry/page index.
 
     Existing entry IDs in out are preserved. Traversal stops on ValueError,
     IndexError, or KeyError, retaining pages indexed before the malformed segment.

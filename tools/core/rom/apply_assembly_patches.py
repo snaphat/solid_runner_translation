@@ -160,10 +160,10 @@ def apply_assembly_repair(rom: bytearray, name: str) -> None:
         TypeError: If rom is not a bytearray or name is not a string.
         ValueError: If the image is not exactly 4 MiB, assembly fails validation, or the
             original ROM has an unexpected SHA-256 hash.
-        AssertionError: If a destination block differs from the original bytes or the expected
-            FF expansion bytes.
         OSError: If the original ROM cannot be read, temporary files cannot be created, written,
             read or removed, or Asar cannot be started.
+        AssertionError: If a destination block differs from the original bytes or the expected
+            FF expansion bytes.
     """
     # Validate caller inputs before loading the original ROM or running Asar.
     if not isinstance(cast(object, rom), bytearray):

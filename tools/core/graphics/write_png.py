@@ -23,6 +23,10 @@ def write_png(path: str | os.PathLike[str], rows: Sequence[bytes], channels: Lit
     """
     Write grayscale or RGB scanlines to a PNG file.
 
+    The destination is overwritten after the complete PNG is encoded. Invalid row dimensions are
+    rejected before opening it; an I/O failure while writing can still leave a partial file.
+    This writer does not create parent directories.
+
     Args:
         path (str | os.PathLike[str]): Destination PNG path; its parent
             directory must exist.

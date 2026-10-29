@@ -159,8 +159,10 @@ def derive_entry_layout_constraints(e: TranslationEntry) -> EntryLayout:
             during compilation; validate width and the explicit row allowance.
 
     Args:
-        e (TranslationEntry): Source text, original slot bounds and optional
-            layout/control metadata.
+        e (TranslationEntry): Source entry with hexadecimal id/end bounds, jp
+            source text, and optional mode, w, and max_lines overrides. Pass
+            metadata loaded by read_translation_files.load(); this function
+            checks selected constraints rather than the complete metadata schema.
 
     Returns:
         EntryLayout: Resolved mode, width, row allowance, slot capacity and
@@ -240,7 +242,9 @@ def encode_entry_layout(
         rom (bytes | bytearray): ROM containing the font tables used to
             measure glyphs and runtime name/number insertions.
         c (EntryLayout): Entry layout constraints. mode selects the encoding strategy;
-            width sets the wrapping or menu-column allowance.
+            width sets the wrapping or menu-column allowance. Obtain it with
+            derive_entry_layout_constraints(); this encoder does not validate the
+            constraint dictionary as a separate schema.
         out (list[str]): Existing validation diagnostics. A centered banner
             exceeding 240 pixels appends a message to this list.
         name_width (int | None, optional): Pixel reservation for F8/12 and F8/18
@@ -292,7 +296,14 @@ def validate_translation_entry(
     e: TranslationEntry, rom: bytes | bytearray, *, name_width: int | None = None
 ) -> list[str]:
     """
-    Report source, command, byte-capacity and layout violations for one translation.
+    This function returns encoding, command-preservation, storage, and layout problems found in one English translation.
+
+    The entry is expected to come from read_translation_files.load(), which checks metadata
+    types and structure. This function converts supported encoding and layout failures into
+    diagnostic strings; it does not validate arbitrary input dictionaries. A truthy skip permits
+    blank English but leaves other checks active. Neither the entry nor the ROM buffer is
+    modified. An empty list means these checks passed, not that the translation's meaning is
+    accurate.
 
     Args:
         e (TranslationEntry): Source text, original slot bounds and optional

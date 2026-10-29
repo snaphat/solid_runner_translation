@@ -1,10 +1,10 @@
 """
 This command lists compressed graphics resources or exports their tiles as PNG previews.
 
-The scan subcommand prints candidate banks and decoded resource sizes. The
-sheets subcommand writes 2bpp and 4bpp tile-sheet images into the requested
-directory when the decoded byte count contains complete tiles at that depth.
-Resources with incomplete 2bpp tiles are reported on stderr and skipped. Both use the reusable graphics functions in core.graphics; the
+The scan subcommand prints candidate banks and decoded resource sizes. The sheets subcommand
+writes 2bpp and 4bpp tile-sheet images into the requested directory when the decoded byte count
+contains complete tiles at that depth. Resources with incomplete 2bpp tiles are reported on
+stderr and skipped. Both subcommands use the reusable graphics functions in core.graphics; the
 command handles argument parsing, original-ROM loading, and console output.
 
 Usage:
