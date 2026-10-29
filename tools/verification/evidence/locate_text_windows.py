@@ -12,21 +12,23 @@ from __future__ import annotations
 
 from typing import cast
 
-from core.text.measure_text_windows import is_combat_caption
+from core.text.get_text_limits import ROM_CAPACITY, is_combat_caption
 
 
 def get_capture_window(entry: str) -> tuple[int, int, tuple[int, int, int]]:
     """
     Select the screen origin and ink threshold for a captured text entry.
 
-    Dialogue, battle captions, centered narration, map labels and concert lyrics
-    occupy different screen regions. Pixel checks use this lookup to place expected
-    font pixels into the correct frame coordinates.
+    Dialogue, battle captions, centered narration, map labels and concert lyrics occupy
+    different screen regions. Pixel checks use this lookup to place expected font pixels into
+    the correct frame coordinates.
 
     Args:
         entry (str): Exactly six ASCII hexadecimal digits identifying the
             original text entry. Uppercase and lowercase are accepted; prefixes,
-            signs, whitespace, and other lengths are rejected.
+            signs, whitespace, and other lengths are rejected. IDs outside the
+            4 MiB ROM capacity are accepted if they have this form, and use
+            the default dialogue settings.
 
     Returns:
         tuple[int, int, tuple[int, int, int]]: Text-plane origin (x, y) in captured-frame
@@ -44,7 +46,7 @@ def get_capture_window(entry: str) -> tuple[int, int, tuple[int, int, int]]:
     # These are framebuffer pixel origins and per-channel brightness cutoffs,
     # not text-storage sizes. Different overlays use different colors and positions.
     n = int(entry, 16)
-    if is_combat_caption(n):
+    if n < ROM_CAPACITY and is_combat_caption(n):
         return 8, 200, (150, 150, 120)  # battle caption strip
 
     if n in (0x169A7E, 0x16E1C5, 0x0B97F6):
