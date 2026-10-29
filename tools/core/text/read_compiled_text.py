@@ -7,12 +7,11 @@ It checks that paginated dialogue segments end where both the event scan and
 text reader expect them to end. Names are checked separately because the game
 copies them with stricter rules than ordinary dialogue.
 
-verify_compiled_text() loads active translation entries, locates their strings
-in a supplied 4 MiB ROM, prints structural failures, and returns zero or one.
-Other helpers decode literal glyphs and build indexes relating ROM text offsets,
+Helpers decode literal glyphs and build indexes relating ROM text offsets,
 page terminators, and item names to translation entry IDs. Capture tools use
 those indexes to identify displayed text. This module does not compare English
 meaning with Japanese or check screenshot pixels, and does not modify the ROM.
+Source-entry structural validation is provided by core.text.validate_compiled_text.
 """
 
 from __future__ import annotations
@@ -293,63 +292,6 @@ class Reader:
                 return "segment ends at %06X without FD 18" % t
 
             pos = t + 2
-
-
-def verify_compiled_text(rom: bytes | bytearray) -> int:
-    """
-    Validate all active translations in a compiled 4 MiB ROM.
-
-    Args:
-        rom (bytes | bytearray): Compiled English ROM to validate; must
-            be exactly 4 MiB.
-
-    Returns:
-        int: Zero when every active entry validates; one on a ROM-size or
-            text-chain failure.
-    """
-    reader = Reader(rom)
-
-    # Compiled text may live in expansion banks, so structural validation requires
-    # the complete 4 MiB English image rather than the original 3 MiB cartridge.
-    if len(rom) != 0x400000:
-        print(f"Invalid English ROM size: {len(rom)} bytes; expected {0x400000}")
-        print("bad 1")
-        return 1
-
-    bad = 0
-
-    for f in script_files.NAMES:
-        for e in script_files.load(f):
-            if not e["en"] or e.get("skip"):
-                continue
-
-            mode = e.get("mode", "v")
-            if e.get("ptrs") or e.get("imm"):
-                # Repointed pointers/immediates lead to strings with their own FF terminator.
-                refs = read_entry_references(rom, e)
-
-                for t in refs:
-                    err = reader.validate_text_chain(t, -1, mode)
-                    if err:
-                        bad += 1
-                        print(f, e["id"], "via pointer", err, repr(e["en"][:40]))
-
-                continue
-
-            # Entries without retargeted references must return to their original slot
-            # terminator. Dialogue also checks agreement with the event interpreter scan.
-            a, b = int(e["id"], 16), int(e["end"], 16)
-            err = (
-                reader.validate_dialogue_segments(a, b)
-                if mode == "v"
-                else reader.validate_text_chain(a, b, mode)
-            )
-            if err:
-                bad += 1
-                print(f, e["id"], mode, err, repr(e["en"][:40]))
-
-    print("bad", bad)
-    return 1 if bad else 0
 
 
 def decode_literal_glyphs(rom: bytes | bytearray, start: int) -> tuple[list[int], int]:
