@@ -1,21 +1,19 @@
 """
-This module calculates pixel advances for encoded text using the ROM's font bitmaps.
+This module calculates pixel advances from ROM font bitmaps and supplied name widths.
 
-iter_text_tokens() distinguishes drawable glyphs, control commands, and runtime
-insertions. measure_glyph_advance() measures one glyph; measure_text_width()
-sums advances and reserves worst-case widths for inserted names and numbers.
-It returns a total advance, rather than the maximum width of separate lines.
-Layout and validation callers use these measurements before drawing the text.
+measure_text_width() sums glyph advances and reserves space for runtime
+insertions. Player names and numbers use fixed maximum lengths; callers supply
+the widest active system-name width for item/opponent insertions. Obtain that
+width with measure_name_width() using names already loaded by the caller.
 
-Player and Runner names use fixed maximum lengths. Item and opponent insertions
-use the widest active name loaded from the system translation source. Optional
-insertion-width caches belong to one set of ROM, font, and translation inputs.
-The measurement functions do not modify the ROM or translation records.
+The functions do not read translation files or modify the ROM. A measurement
+cache belongs to one set of ROM/font inputs. System-name cache entries are
+refreshed from the supplied width so changing it cannot reuse an old value.
 """
 
 from __future__ import annotations
 
-from typing import Iterator, Literal
+from typing import Iterable, Iterator, Literal, cast
 
 from core.text.encode_text import encode_text
 from core.text.read_text_tokens import decode_glyph_index, parse_encoded_text
@@ -101,27 +99,46 @@ WIDE = 13  # Pixel advance reserved per player-entered name glyph, including gap
 DIGIT_W = 9  # Maximum digit advance in pixels, including gap; reserves number width.
 
 
-def measure_insertion_width(rom: bytes | bytearray, code: bytes) -> int:
+def _validate_name_width(name_width: int | None) -> None:
+    """
+    Reject invalid explicit system-name widths.
+
+    Args:
+        name_width (int | None): Nonnegative pixel width, or None when absent.
+
+    Raises:
+        ValueError: name_width is neither None nor a nonnegative integer;
+            booleans are rejected.
+    """
+    # bool is an int subclass; True must not become a one-pixel reservation.
+    if name_width is not None and (type(name_width) is not int or name_width < 0):
+        raise ValueError("System-name width must be a nonnegative integer")
+
+
+def measure_insertion_width(code: bytes, *, name_width: int | None = None) -> int:
     """
     Measure the maximum width reserved for a runtime name or number insertion.
 
     Player-entered names and numeric values use the native maximum lengths. Other
-    name insertions use the widest active system-name entry. Word wrapping uses
-    the result before the actual inserted value is known.
+    name insertions use the caller's widest active system-name measurement.
+    Word wrapping uses the result before the actual inserted value is known.
 
     Args:
-        rom (bytes | bytearray): Font tables used to reserve space for
-            inserted text.
         code (bytes): Complete F8 insertion token, including opcode and
             operands.
+        name_width (int | None, optional): Pixel width of the longest translated
+            item/opponent name. F8/12 and F8/18 use this value as their reserved
+            advance. Supply a nonnegative integer measured by measure_name_width().
+            None is allowed for player-name and numeric insertion commands.
 
     Returns:
         int: Horizontal text advance in pixels.
 
     Raises:
-        ValueError: code is not one complete supported insertion command, or no
-            active system names are available for an item/opponent insertion.
+        ValueError: code is not one supported insertion command, name_width is
+            invalid, or an item/opponent insertion has no supplied name width.
     """
+    _validate_name_width(name_width)
     if (
         len(parse_encoded_text(code)) != 1
         or code[0] != 0xF8
@@ -130,26 +147,28 @@ def measure_insertion_width(rom: bytes | bytearray, code: bytes) -> int:
         raise ValueError("Width measurement requires one complete name or number insertion")
     op = code[1]
     if op == 0x0C:  # player-entered names: 5 chars, Runner name 6
+        # Saved name contents are unknown during layout. Reserve the buffer's
+        # full character capacity using the maximum name-glyph advance.
         return WIDE * (6 if code[2] == 0x02 else 5)
 
     if op == 0x04:  # number: arg 1 = value size in bytes
+        # Unsigned 1/2/3-byte values require at most 3/5/8 decimal digits.
+        # The fallback reserves ten digits for the larger numeric case.
         return DIGIT_W * {1: 3, 2: 5, 3: 8}.get(code[2], 10)
 
-    from core.text import read_translation_files as script_files
-
-    return max(
-        sum(
-            measure_glyph_advance(rom, g)
-            for _, g in iter_text_tokens(encode_text(e["en"]))
-            if isinstance(g, int)
-        )
-        for e in script_files.load("system")
-        if e.get("mode") == "n" and e.get("en") and not e.get("skip")
-    )  # opponent name / item name
+    # F8/12 and F8/18 select names during gameplay. Their width comes from the
+    # caller's complete translated-name list, measured using this build's font.
+    if name_width is None:
+        raise ValueError("Item/opponent insertions require an explicit system-name width")
+    return name_width
 
 
 def measure_text_width(
-    rom: bytes | bytearray, b: bytes, insert_sizes: dict[bytes, int] | None = None
+    rom: bytes | bytearray,
+    b: bytes,
+    insert_sizes: dict[bytes, int] | None = None,
+    *,
+    name_width: int | None = None,
 ) -> int:
     """
     Measure text with worst-case dynamic insertion widths.
@@ -158,13 +177,24 @@ def measure_text_width(
         rom (bytes | bytearray): Font tables used to measure the encoded
             text.
         b (bytes): Encoded game text, including any control-code operands.
-        insert_sizes (dict[bytes, int] | None, optional): Mutable cache for
-            this layout. Discard it after changing ROM, font or translation
-            inputs; None creates a fresh cache.
+        insert_sizes (dict[bytes, int] | None, optional): Mutable token-to-width
+            cache for repeated measurements in one layout. Player-name and
+            numeric reservations are reused. Item/opponent reservations are
+            refreshed from name_width on each call. None creates a fresh cache.
+        name_width (int | None, optional): Pixel advance added for each F8/12 or
+            F8/18 item/opponent-name command in b. Obtain the longest name's
+            advance with measure_name_width() using the same ROM font. The value
+            must be a nonnegative integer. None is allowed if b contains no
+            item/opponent-name commands.
 
     Returns:
         int: Horizontal text advance in pixels.
+
+    Raises:
+        ValueError: name_width is invalid or an item/opponent insertion has no
+            supplied name width, or an encoded token/font record is invalid.
     """
+    _validate_name_width(name_width)
     # A layout may measure many candidate lines. Cache their insertions only
     # within that layout, so another ROM, font or script edit is measured afresh.
     insert_sizes = {} if insert_sizes is None else insert_sizes
@@ -174,8 +204,10 @@ def measure_text_width(
         # Runtime insertions have no single font glyph. Reserve their computed
         # maximum width and cache it across the candidate lines of this layout.
         if glyph == "name":
-            if token not in insert_sizes:
-                insert_sizes[token] = measure_insertion_width(rom, token)
+            # System-name reservations depend on this call's explicit width.
+            # Refresh them even if the caller retained a cache from another width.
+            if token[:2] in (b"\xf8\x12", b"\xf8\x18") or token not in insert_sizes:
+                insert_sizes[token] = measure_insertion_width(token, name_width=name_width)
 
             width += insert_sizes[token]
         # Commands and terminators contribute no glyph advance; literal glyphs
@@ -184,3 +216,53 @@ def measure_text_width(
             width += measure_glyph_advance(rom, glyph)
 
     return width
+
+
+def measure_name_width(rom: bytes | bytearray, names: Iterable[str]) -> int:
+    """
+    Measure the widest translated name that dialogue may insert during gameplay.
+
+    Dialogue can contain commands that substitute an item or opponent name.
+    Before the game chooses that name, wrapping reserves the largest possible
+    width. This function measures every supplied name using the candidate ROM's
+    font and returns the largest advance. Load the strings with
+    read_translation_files.load_names_for_dialogue_layout() before calling it.
+
+    Args:
+        rom (bytes | bytearray): Font tables used to measure literal glyphs.
+        names (Iterable[str]): Nonempty collection of translated names. Each
+            name must contain only literal glyphs; controls and newlines are
+            rejected. Supply a collection, not a single string.
+
+    Returns:
+        int: Maximum summed glyph advance among the supplied names.
+
+    Raises:
+        TypeError: names is not an iterable collection of strings, or is a
+            string/byte buffer instead of a collection.
+        KeyError: A name contains a character with no game encoding.
+        ValueError: No names are supplied, a name has control markup or a
+            newline, or a font record lies outside the ROM.
+    """
+    # A bare string would iterate character by character and accidentally
+    # measure the widest letter instead of the widest complete name.
+    if isinstance(cast(object, names), (str, bytes, bytearray)):
+        raise TypeError("System names must be supplied as a collection of strings")
+    # None distinguishes no records from a supplied name with zero advance.
+    widest: int | None = None
+    for name in names:
+        if not isinstance(cast(object, name), str):
+            raise TypeError("Each system name must be a string")
+        width = 0
+        for _, glyph in iter_text_tokens(encode_text(name)):
+            # Controls could insert more text or move the cursor. Reject them
+            # so each candidate contributes the width of one literal name.
+            if not isinstance(glyph, int) or glyph < 0:
+                raise ValueError("System names must contain only literal glyphs")
+            width += measure_glyph_advance(rom, glyph)
+        # The game can choose any candidate; reserve the largest whole-name
+        # advance, including each glyph's shadow and spacing.
+        widest = width if widest is None else max(widest, width)
+    if widest is None:
+        raise ValueError("At least one active system name is required")
+    return widest

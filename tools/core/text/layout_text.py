@@ -25,7 +25,12 @@ PAGE = b"\xfd\x18"  # FD waits/ends the page; event opcode 18 starts the next te
 
 
 def wrap_text(
-    rom: bytes | bytearray, text: str, max_w: int = MAX_W, paginate: bool = True
+    rom: bytes | bytearray,
+    text: str,
+    max_w: int = MAX_W,
+    paginate: bool = True,
+    *,
+    name_width: int | None = None,
 ) -> bytes:
     """
     Wrap English text to its pixel limit and optionally split it into dialogue pages.
@@ -44,13 +49,19 @@ def wrap_text(
             booleans and other nonintegers are rejected.
         paginate (bool, optional): Enable automatic pagination when True;
             explicit page breaks are preserved in either mode. Must be a boolean.
+        name_width (int | None, optional): Pixel space reserved for each item or
+            opponent name inserted while the game displays a line. Word-fit
+            decisions and final line checks use this same reservation. Supply
+            the nonnegative result of measure_text.measure_name_width(). None
+            is allowed when the text contains no F8/12 or F8/18 name commands.
 
     Returns:
         bytes: Encoded text with layout controls; no final FF terminator is
             added.
 
     Raises:
-        ValueError: max_w is not a positive integer; booleans are rejected.
+        ValueError: max_w is not a positive integer, or a required system-name
+            width is absent or invalid. Booleans are not valid widths.
         TypeError: paginate is not a boolean.
         AssertionError: A wrapped line still exceeds its pixel-width allowance.
     """
@@ -64,6 +75,8 @@ def wrap_text(
     # so wrapping cannot cut a valid command in half.
     text = re.sub(r"\{[^{}]*\}", lambda match: "{" + encode_text(match.group()).hex() + "}", text)
     pages: list[list[str]] = []
+    # Every candidate line uses the same name reservation. Reusing insertion
+    # measurements keeps word-fit decisions and final line checks consistent.
     insert_sizes: dict[bytes, int] = {}
 
     # An explicit form feed starts a new page before word wrapping. Explicit
@@ -80,7 +93,9 @@ def wrap_text(
                 cand = word if not cur else cur + " " + word
                 if (
                     cur
-                    and measure_text.measure_text_width(rom, encode_vwf_line(cand), insert_sizes)
+                    and measure_text.measure_text_width(
+                        rom, encode_vwf_line(cand), insert_sizes, name_width=name_width
+                    )
                     > max_w
                 ):
                     lines.append(cur)
@@ -105,7 +120,9 @@ def wrap_text(
 
     for p in pages:
         for line in p:
-            w = measure_text.measure_text_width(rom, encode_vwf_line(line), insert_sizes)
+            w = measure_text.measure_text_width(
+                rom, encode_vwf_line(line), insert_sizes, name_width=name_width
+            )
             if not (w <= max_w):
                 raise AssertionError(f"word too wide ({w}px): {line!r}")
 
@@ -135,7 +152,11 @@ def encode_vwf_line(line: str) -> bytes:
 
 
 def encode_menu_layout(
-    rom: bytes | bytearray, text: str, cells_total: int | None = None
+    rom: bytes | bytearray,
+    text: str,
+    cells_total: int | None = None,
+    *,
+    name_width: int | None = None,
 ) -> bytes | bytearray:
     """
     Encode menu labels at their assigned fixed-width cell positions.
@@ -152,6 +173,11 @@ def encode_menu_layout(
             cells reserved per menu row; booleans and other nonintegers are
             rejected. None uses a 99-cell final-label bound; earlier labels
             remain bounded by the following column marker.
+        name_width (int | None, optional): Pixel space reserved when a menu label
+            contains an F8/12 or F8/18 item/opponent-name command. It contributes
+            to the label's width before positioning the next column. Supply a
+            nonnegative result from measure_text.measure_name_width(). None is
+            allowed when the labels contain no such name commands.
 
     Returns:
         bytes | bytearray: Encoded menu rows with explicit cell positioning,
@@ -159,14 +185,18 @@ def encode_menu_layout(
 
     Raises:
         ValueError: cells_total is neither None nor a positive integer (booleans
-            are rejected), or menu column markup is malformed.
+            are rejected), menu column markup is malformed, or a required
+            system-name width is absent or invalid.
         AssertionError: A label overlaps its predecessor or exceeds its
             assigned pixel width.
     """
     if cells_total is not None and (type(cells_total) is not int or cells_total <= 0):
         raise ValueError("Menu row width must be a positive integer")
     if "\n" in text:  # several menu rows: lay out each, joined by 00 newlines
-        return b"\x00".join(encode_menu_layout(rom, line, cells_total) for line in text.split("\n"))
+        return b"\x00".join(
+            encode_menu_layout(rom, line, cells_total, name_width=name_width)
+            for line in text.split("\n")
+        )
 
     # Require markers to cover the entire row. Text outside a marker would
     # otherwise have no native column and could shift the selectable labels.
@@ -194,7 +224,9 @@ def encode_menu_layout(
         out += bytes([1]) * n + bytes([0xFC, 0xF3]) * r  # FCF3 = 1px space (see asm/vwf.asm)
         x = target
         b = encode_text(item)
-        x += measure_text.measure_text_width(rom, b)
+        # A runtime name in a label consumes its reserved pixel width before
+        # padding or overlap checks place the next selectable label.
+        x += measure_text.measure_text_width(rom, b, name_width=name_width)
         out += b
 
         # Each label ends before the next marker, or before the supplied row

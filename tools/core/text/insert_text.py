@@ -64,6 +64,8 @@ def insert_translations(
     rom: bytearray,
     messages: Iterable[InsertionRecord],
     bank_free: dict[int, list[int]] | None = None,
+    *,
+    name_width: int | None = None,
 ) -> int:
     """
     Insert translated text and retarget its native references.
@@ -102,6 +104,12 @@ def insert_translations(
         bank_free (dict[int, list[int]] | None, optional): Shared bank-tail
             [next-free, end] cursors; None starts an independent allocation
             pass.
+        name_width (int | None, optional): Width of the longest translated name
+            the game can insert into this text. Measure it once with
+            measure_text.measure_name_width() after installing the ROM font.
+            Wrapping, centering, and menu positioning reserve that many pixels
+            for each F8/12 or F8/18 command. Supply a nonnegative integer; None
+            is allowed when the entries need no item/opponent-name measurement.
 
     Returns:
         int: Final VWF allocator file offset; other allocator cursors are not
@@ -109,7 +117,8 @@ def insert_translations(
 
     Raises:
         ValueError: The candidate is not a 4 MiB ROM, or a slot, layout mode,
-            width or reference operand is invalid.
+            width or reference operand is invalid, or a required system-name
+            width is absent or invalid.
         AssertionError: Allocation, original-slot capacity or native pagination
             constraints prevent safe insertion. Paginated dialogue requires room
             for native segments in its original slot and cannot use a standalone
@@ -159,18 +168,28 @@ def insert_translations(
         width = msg[4] if len(msg) > 4 else (layout_text.MAX_W if mode == "v" else 216)
         laid: bytes | bytearray
 
+        # Centering, menu columns, and wrapping all use the caller's name
+        # reservation so inserted names affect placement before bytes are stored.
         if mode == "f":
             laid = encode_text(text)
         elif mode == "c":  # centered banner (location names): center within 240px
             b = encode_text(text)
-            pad = max(0, (240 - measure_text.measure_text_width(rom, b)) // 2)
+            pad = max(
+                0, (240 - measure_text.measure_text_width(rom, b, name_width=name_width)) // 2
+            )
             n, r = divmod(pad, measure_text.SPACEW)
             laid = bytes([1]) * n + bytes([0xFC, 0xF3]) * r + b
         elif mode == "m":
-            laid = layout_text.encode_menu_layout(rom, text, msg[4] if len(msg) > 4 else None)
+            laid = layout_text.encode_menu_layout(
+                rom, text, msg[4] if len(msg) > 4 else None, name_width=name_width
+            )
         else:
             laid = layout_text.wrap_text(
-                rom, text, width if width is not None else layout_text.MAX_W, paginate=(mode == "v")
+                rom,
+                text,
+                width if width is not None else layout_text.MAX_W,
+                paginate=(mode == "v"),
+                name_width=name_width,
             )  # 'p' and 'n': no pages
 
         # Choose how native references reach the payload. The original slot

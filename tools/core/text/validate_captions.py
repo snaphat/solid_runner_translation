@@ -20,24 +20,39 @@ if TYPE_CHECKING:
 
 
 def validate_combat_captions(
-    rom: bytes | bytearray, messages: Iterable[CompleteInsertionRecord]
+    rom: bytes | bytearray,
+    messages: Iterable[CompleteInsertionRecord],
+    *,
+    name_width: int | None = None,
 ) -> int:
     """
     Reject multiline captions and embedded terminators before writing an English ROM.
 
-    Measures runtime insertions against the candidate font and preserves the
-    four-pixel margin within the 240-pixel strip.
+    Battle captions have one visible row. Measure each caption using the font
+    installed in rom and allow at most 236 pixels of the 240-pixel strip.
+    A record can request a smaller limit. Captions outside the known battle
+    text offsets are skipped.
+
+    A caption can contain a command that inserts an item or opponent name.
+    The game chooses that name later. Supply the longest possible name's pixel
+    width through name_width so this check reserves room for that choice.
 
     Args:
         rom (bytes | bytearray): Candidate ROM containing the installed
             caption font.
-        messages (Iterable[CompleteInsertionRecord]): Compiler insertion records
-            containing original start/end offsets, English text, mode, optional
-            width, pointers, and address operands. Start offsets must be integers
-            within 4 MiB LoROM capacity; booleans are rejected. Non-caption
-            records are skipped. Caption width must be None or a positive
-            integer; booleans and other nonintegers are rejected. None uses the
-            strip limit, and larger integer widths are capped at that limit.
+        messages (Iterable[CompleteInsertionRecord]): Translation records in
+            (start, end, text, mode, width, pointers, address_operands) order.
+            start identifies which entries are battle captions. text supplies
+            their English wording. width is None or a positive integer pixel
+            limit; None uses 236 pixels and larger values are capped at 236.
+            start must be an integer from 0 through 0x3FFFFF. Booleans are
+            rejected for offsets and widths. Other fields are retained in the
+            record for compilation and are not used by this check.
+        name_width (int | None, optional): Keyword-only pixel reservation for
+            each F8/12 or F8/18 item/opponent-name command in a caption. Use
+            measure_text.measure_name_width() with the same ROM font and name
+            list used for compilation. The value must be a nonnegative integer.
+            None is allowed when the checked captions contain no such commands.
 
     Returns:
         int: Number of combat-caption entries checked successfully.
@@ -47,7 +62,17 @@ def validate_combat_captions(
         ValueError: A start offset is outside LoROM capacity, a caption width
             is neither None nor a positive integer, or a combat caption wraps,
             contains a page break or an FD/FE/FF terminator, or exceeds its
-            strip allowance.
+            strip allowance, or a required system-name width is absent or invalid.
+
+    Examples:
+        With rom containing the installed font and messages holding the
+        translation records, load and measure the name candidates once:
+
+        from core.text import measure_text, read_translation_files
+
+        names = read_translation_files.load_names_for_dialogue_layout()
+        width = measure_text.measure_name_width(rom, names)
+        validate_combat_captions(rom, messages, name_width=width)
     """
     errors: list[str] = []
     checked = 0
@@ -63,11 +88,12 @@ def validate_combat_captions(
 
         checked += 1
 
-        # The combat renderer has no second caption row. Enforce both the entry
-        # width and the global strip width before rejecting any resulting line/page break.
+        # Check the same inserted-name reservation that compilation will use.
+        # The chosen item/opponent name must fit without creating a second row.
+        # The record's width can reduce, but cannot enlarge, the caption strip.
         limit = min(width if width is not None else layout_text.MAX_W, layout_text.MAX_W)
         try:
-            laid = layout_text.wrap_text(rom, text, limit, paginate=False)
+            laid = layout_text.wrap_text(rom, text, limit, paginate=False, name_width=name_width)
         except AssertionError as error:
             errors.append(f"{start:06X}: {error}")
             continue
