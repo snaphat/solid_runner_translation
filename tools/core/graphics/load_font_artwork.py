@@ -9,8 +9,8 @@ multiline punctuation bitmaps; # marks ink and other characters are background.
 load_font_artwork() can also validate another file and return its artwork
 without changing those tables. register_glyph_artwork() adds or replaces one
 bitmap in G. Other modules measure or install these bitmaps; this module does
-not write them into a ROM. MAIN_FONT and VWF_FONT give the ROM byte offsets
-of the two font tables.
+not write them into a ROM. The font_tables module defines the ROM byte offsets
+used to install or measure the two font tables.
 """
 
 from __future__ import annotations
@@ -183,7 +183,3 @@ G.update({character: rows.copy() for character, rows in _ART["glyphs"].items()})
 
 # Punctuation bitmap rows installed into the native fixed-width font.
 MAIN_PUNCT: dict[str, str] = _ART["punctuation"]
-
-# Unheadered ROM byte offsets; glyphs use 22 bytes (eleven little-endian 16-bit rows).
-MAIN_FONT = 0x170000  # Native fixed-width table, including Japanese glyphs.
-VWF_FONT = 0x3F0000  # Separate 256-glyph table used by the Latin VWF renderer.

@@ -15,11 +15,10 @@ from __future__ import annotations
 
 from typing import Iterable, Iterator, Literal, cast
 
+from core.graphics.font_tables import MAIN_FONT, VWF_FONT
 from core.text.encode_text import encode_text
 from core.text.read_text_tokens import decode_glyph_index, parse_encoded_text
 
-FONT = 0x170000  # Native font file offset; each glyph has eleven 16-bit rows.
-VWF_FONT = 0x3F0000  # glyphs 0-255 as the VWF draws them
 GAP, SPACEW = 1, 4  # Pixels: inter-glyph gap and space advance; match asm/vwf.asm.
 
 
@@ -76,7 +75,7 @@ def measure_glyph_advance(rom: bytes | bytearray, idx: int) -> int:
     """
     if type(idx) is not int:
         raise TypeError("Glyph index must be an integer; booleans are not indices")
-    base = VWF_FONT if idx < 256 else FONT
+    base = VWF_FONT if idx < 256 else MAIN_FONT
     if idx < 0 or base + (idx + 1) * 22 > len(rom):
         raise ValueError("Glyph index does not identify a complete ROM font record")
     # Combine all eleven bitmap rows to find the glyph's leftmost and rightmost ink.
