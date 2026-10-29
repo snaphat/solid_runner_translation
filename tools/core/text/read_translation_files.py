@@ -19,7 +19,7 @@ The readable file stores one block per original-ROM text offset:
 English occupies the lines after the initial # lines. Blocks are separated
 by a blank line before the next #### header. A trailing | protects whitespace
 or a literal final | and is removed on load. The source writes page breaks
-as \f, carriage returns as \r, and literal backslashes as \\.
+as \\f, carriage returns as \\r, and literal backslashes as \\\\.
 
 JSON entries use the same IDs and hold fields such as end, mode, w, ptrs, imm,
 and skip. These specify the original text slot, layout, references to update,
@@ -72,6 +72,10 @@ class TextReferences(TypedDict):
     """
     Original text location and the references that can redirect it.
 
+    id is required. ptrs and imm may be omitted or empty to indicate no such
+    references. A nonempty imm list contains exactly three distinct offsets,
+    ordered as low address byte, high address byte, and CPU bank byte.
+
     Attributes:
         id (str): Hexadecimal original-ROM text offset.
         ptrs (list[str]): Optional hexadecimal offsets of 16-bit text pointers.
@@ -90,6 +94,9 @@ class TranslationEntry(TextReferences):
     Required fields identify the original storage range and both language texts.
     Optional fields describe layout and intentional departures from source rules.
     Other collection metadata may coexist with these fields in loaded entries.
+    Only id, end, jp, and en are required keys; every other documented field may
+    be absent. load() checks known metadata shapes, while validate_translation
+    checks encoding and display rules against a candidate ROM.
 
     Attributes:
         id (str): Hexadecimal original-ROM text offset, without a prefix.
@@ -102,14 +109,15 @@ class TranslationEntry(TextReferences):
         max_lines (int): Visible row allowance for prose or centered banners.
         skip (bool | str): Whether to omit the entry, optionally with a reason.
         menu_columns (list[list[int]]): Expected column positions for each row.
-        fixed_line_bytes (list[int]): Maximum encoded byte count for each row.
+        fixed_line_bytes (list[int]): Maximum encoded byte count for each fixed-text
+            row; the list must also match the encoded row count at validation.
         reviewed_controls (list[str]): Expected English brace-delimited commands,
             including duplicates; overrides comparison with Japanese commands.
         max_name_bytes (int): Encoded name capacity, overriding eight bytes.
         name_spaces (bool): Whether a name may contain spaces.
         ptrs (list[str]): Hexadecimal offsets of retargetable 16-bit pointers.
-        imm (list[str]): Three distinct hexadecimal offsets of address bytes
-            stored as CPU instruction operands, in low/high/bank order.
+        imm (list[str]): Empty, or three distinct hexadecimal offsets of address
+            bytes stored as CPU instruction operands, in low/high/bank order.
     """
 
     end: str
@@ -245,6 +253,11 @@ def format_text(
     """
     Serialize editable translation blocks without changing controls.
 
+    Entry order and English whitespace are preserved through the source escaping
+    rules. This formatter checks active blank English and reserved line prefixes;
+    it does not validate entry IDs or metadata. save() also runs format_meta()
+    before writing either file.
+
     Args:
         name (Literal['events', 'system', 'additions']): Collection basename
             without an extension.
@@ -302,9 +315,14 @@ def parse_text(text: str, where: str = "script") -> list[dict[str, str]]:
     """
     Parse readable blocks into id/jp/en/note dictionaries.
 
+    Only the leading #JP and #NOTE lines supply Japanese and notes; other leading
+    comment lines are ignored. The remaining lines are English without an #EN
+    tag. Header IDs are retained as strings, not validated or deduplicated here;
+    load() checks them when joining metadata. Input with no blocks returns [].
+
     Args:
-        text (str): Readable translation-file contents containing ID, JP, EN
-            and optional NOTE blocks.
+        text (str): Readable translation-file contents using #### ID headers,
+            leading #JP and optional #NOTE lines, then untagged English lines.
         where (str, optional): Source label included in malformed-block
             diagnostics.
 
@@ -314,7 +332,8 @@ def parse_text(text: str, where: str = "script") -> list[dict[str, str]]:
 
     Raises:
         ValueError: Content precedes the first ID header or an entry header
-            lacks its required blank separator.
+            lacks its required blank separator before another entry. The final
+            entry may omit that separator.
     """
     # Normalize physical file line endings before parsing; encoded in-game
     # line and page breaks are decoded later from each text field.
@@ -487,6 +506,8 @@ def _validate_metadata(entry_id: str, metadata: dict[str, object]) -> None:
     if "name_spaces" in metadata and type(metadata["name_spaces"]) is not bool:
         raise ValueError(f"{entry_id}: name_spaces must be a boolean")
 
+    # Pointer fields store hexadecimal ROM locations. Controls store source
+    # markup strings; byte limits and menu columns store integer row values.
     for key in ("ptrs", "imm", "reviewed_controls", "fixed_line_bytes", "menu_columns"):
         if key not in metadata:
             continue
@@ -534,7 +555,10 @@ def load(
             to readable text by entry ID.
 
     Raises:
-        ValueError: Text IDs or metadata fields are malformed, duplicated or inconsistent, or an active translation is blank.
+        ValueError: The collection name, text IDs, or metadata fields are invalid,
+            IDs are duplicated or inconsistent, or an active translation is blank.
+        OSError: The text or metadata file cannot be opened or read.
+        UnicodeError: A source file is not valid UTF-8.
     """
     text_path, meta_path = resolve_collection_paths(name, folder)
     texts = parse_text(text_path.read_text(encoding="utf-8"), text_path.name)
@@ -599,7 +623,10 @@ def load_all(folder: str | os.PathLike[str] | None = None) -> dict[str, list[Tra
         dict[str, list[TranslationEntry]]: Ordered entries for every configured collection.
 
     Raises:
-        ValueError: Two collections assign entries to the same ROM offset.
+        ValueError: A collection fails load() validation, or two collections
+            assign entries to the same numeric ROM offset.
+        OSError: A collection source file cannot be opened or read.
+        UnicodeError: A source file is not valid UTF-8.
     """
     collections: dict[str, list[TranslationEntry]] = {name: load(name, folder) for name in NAMES}
     owners: dict[int, str] = {}
@@ -621,7 +648,9 @@ def save(
     Write readable text and metadata together through the file transaction helper.
 
     Formats both files before either is replaced. Failed writes follow
-    replace_many rollback and recovery behavior.
+    replace_many rollback and recovery behavior. The translation root and meta/
+    directory are created if needed. Entries are consumed once into a list; the
+    text and metadata formatters then receive the same ordered records.
 
     Args:
         name (Literal['events', 'system', 'additions']): Collection basename
@@ -633,8 +662,9 @@ def save(
             translation directory.
 
     Raises:
-        OSError: Staging or replacement fails; the related-file transaction
-            attempts rollback.
+        OSError: Directory creation, staging, replacement, or cleanup fails.
+            The related-file transaction attempts rollback for replacement errors
+            and retains recovery files if rollback also fails.
         ValueError: An active translation is blank, or its technical metadata is invalid.
         AssertionError: An English line starts with the reserved # comment prefix.
     """
@@ -664,6 +694,10 @@ def hash_collection_files(
 
     Returns:
         str: Hexadecimal SHA-256 of readable text bytes followed by metadata bytes.
+
+    Raises:
+        ValueError: The collection name is not events, system, or additions.
+        OSError: Either collection file cannot be opened or read.
     """
     import hashlib
 
@@ -684,7 +718,10 @@ def load_names_for_dialogue_layout(folder: str | os.PathLike[str] | None = None)
     every entry marked mode n, which identifies a name record. Exclude entries
     whose skip field is true or contains an exclusion reason, and entries with
     no English text. Every remaining name record contributes to the candidate
-    list. The complete source collection is validated before this selection.
+    list. load() checks collection IDs, metadata, and nonblank active English
+    before this selection. Encoding and name-copy restrictions are not checked
+    here; measure_name_width() rejects candidates containing controls or
+    unsupported characters when it measures them.
 
     Pass the returned strings to measure_text.measure_name_width(rom, names).
     Pass that pixel width as name_width to the layout or insertion function.
@@ -705,6 +742,7 @@ def load_names_for_dialogue_layout(folder: str | os.PathLike[str] | None = None)
         ValueError: Readable text or JSON metadata is malformed, their entry IDs
             disagree, or a non-skipped translation has blank English text.
         OSError: Either source file cannot be read.
+        UnicodeError: A source file is not valid UTF-8.
     """
     # Name records share the system collection with prose and interface text.
     # Mode n selects the strings copied as names. Retain every eligible name

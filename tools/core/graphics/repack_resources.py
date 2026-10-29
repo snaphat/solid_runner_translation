@@ -59,6 +59,11 @@ def pack_resource_group(
     """
     Recompress a replacement and adjacent resources into their combined allocation.
 
+    The final table entry can bound a group but cannot itself be replaced: a
+    following untouched resource supplies the allocation end. Neighbors are
+    included only until the first fit. Neither source nor replacement is changed;
+    pass the returned blocks to write_resource_group() for installation.
+
     Args:
         source (bytes | bytearray): Original ROM supplying the resource table and neighbors.
         bank (int): Zero-based 32 KiB file-bank index.
@@ -117,6 +122,11 @@ def write_resource_group(
     """
     Verify and install repacked resources with their bank-local pointers.
 
+    All allocation, original-content, and decoded-payload checks run before the
+    first write. Supply the same original ROM and replacement used for packing.
+    The selected pointers and compressed allocation in rom must still match
+    source; unrelated changes elsewhere in rom are permitted.
+
     Args:
         rom (bytearray): Destination ROM modified in place after content checks.
         source (bytes | bytearray): Original ROM defining the allocation and unchanged neighbors.
@@ -134,7 +144,8 @@ def write_resource_group(
 
     Raises:
         TypeError: rom is not a mutable bytearray, source is not bytes or
-            bytearray, or clear_tail is not a boolean.
+            bytearray, a packed block is not bytes or bytearray, or clear_tail
+            is not a boolean.
         AssertionError: The table, allocation or decoded contents are inconsistent,
             the original compressed blocks are not contiguous, the allocation
             is shared with an unselected entry, or an earlier stream has no valid end.
@@ -189,7 +200,7 @@ def write_resource_group(
         rom[position : position + len(block)] = block
         position += len(block)
 
-    # Zero padding is selected by the repair's clear_tail policy. Otherwise
+    # Zero padding is selected by the caller through clear_tail. Otherwise
     # leave trailing allocation bytes unchanged after installing the payload.
     if clear_tail:
         rom[position:limit] = bytes(limit - position)

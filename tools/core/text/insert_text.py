@@ -50,10 +50,15 @@ def encode_text_jump(off: int) -> bytes:
     Return the F8 06 long-text-jump bytes targeting the supplied file offset.
 
     Args:
-        off (int): Zero-based byte offset in the unheadered ROM.
+        off (int): Target byte offset from 0 through 0x3FFFFF in an unheadered
+            LoROM image. The target need not exist in a particular buffer.
 
     Returns:
-        bytes: Five-byte F8/06 long-text jump.
+        bytes: F8 06 followed by the low, high, and bank bytes of the canonical
+            SNES target address. No terminator is appended.
+
+    Raises:
+        ValueError: off is outside the standard 4 MiB LoROM address range.
     """
     # F8 06 is a text jump followed by the low, high and bank address bytes.
     a = convert_file_offset_to_snes(off)
@@ -69,6 +74,13 @@ def insert_translations(
 ) -> int:
     """
     Insert translated text and retarget its native references.
+
+    Slot bounds, mode codes, widths, and reference locations are checked for
+    all records before insertion starts. Encoding, layout, and allocation happen
+    record by record; a later failure can leave earlier writes in rom or entries
+    in bank_free. Use a disposable candidate buffer if failure must be discarded.
+    Source rules such as command preservation and name-copy restrictions belong
+    to validate_translation_entry(), not this writer.
 
     Layout modes:
 
@@ -112,13 +124,16 @@ def insert_translations(
             is allowed when the entries need no item/opponent-name measurement.
 
     Returns:
-        int: Final VWF allocator file offset; other allocator cursors are not
+        int: Next free offset in the proportional-text allocator after insertion.
+            With no proportional allocation, this is the first FREE_REGIONS start.
+            This is not a byte count or ROM size; other allocator cursors are not
             included.
 
     Raises:
         ValueError: The candidate is not a 4 MiB ROM, or a slot, layout mode,
             width or reference operand is invalid, or a required system-name
-            width is absent or invalid.
+            width is absent or invalid, or encoded markup/tokens are malformed.
+        KeyError: A source character has no game encoding.
         AssertionError: Allocation, original-slot capacity or native pagination
             constraints prevent safe insertion. Paginated dialogue requires room
             for native segments in its original slot and cannot use a standalone

@@ -4,8 +4,10 @@ This module validates translated battle captions against the single-line caption
 validate_combat_captions() selects caption records by their original ROM offsets,
 wraps their English text using the candidate font, and rejects line breaks,
 page breaks, embedded stream terminators, and text wider than the strip. Each
-record's width can impose a smaller limit. The function returns the number of captions checked or raises
-ValueError with collected layout failures. It does not modify the ROM.
+record's width can impose a smaller limit. The function returns the number of
+captions checked or raises ValueError with collected fit/line failures.
+Malformed source or invalid arguments can fail immediately instead of being
+collected. It does not modify the ROM.
 """
 
 from __future__ import annotations
@@ -36,6 +38,9 @@ def validate_combat_captions(
     A caption can contain a command that inserts an item or opponent name.
     The game chooses that name later. Supply the longest possible name's pixel
     width through name_width so this check reserves room for that choice.
+    Fit failures and embedded line/page/terminator tokens are collected across
+    captions. Invalid arguments, unsupported characters, and malformed source
+    tokens raise immediately; those failures are not added to the collected list.
 
     Args:
         rom (bytes | bytearray): Candidate ROM containing the installed
@@ -62,7 +67,9 @@ def validate_combat_captions(
         ValueError: A start offset is outside LoROM capacity, a caption width
             is neither None nor a positive integer, or a combat caption wraps,
             contains a page break or an FD/FE/FF terminator, or exceeds its
-            strip allowance, or a required system-name width is absent or invalid.
+            strip allowance, a required system-name width is absent or invalid,
+            or an encoded token or measured font record is invalid.
+        KeyError: A caption character has no game encoding.
 
     Examples:
         With rom containing the installed font and messages holding the

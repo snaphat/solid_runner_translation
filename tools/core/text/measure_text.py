@@ -38,6 +38,11 @@ def iter_text_tokens(b: bytes) -> Iterator[tuple[bytes, int | Literal["name"] | 
         tuple[bytes, int | Literal['name'] | None]: Pair (token bytes, glyph index); the second item
             is a font index (or -1 for newline), "name" for a dynamic insertion,
             or None for another control or terminator.
+
+    Raises:
+        TypeError: b is neither bytes nor bytearray.
+        ValueError: A command or extended glyph is truncated, or an F8 subopcode
+            is unsupported. Parsing checks the whole buffer before yielding tokens.
     """
     for token in parse_encoded_text(b):
         if token[0] == 0xF8:
@@ -123,8 +128,10 @@ def measure_insertion_width(code: bytes, *, name_width: int | None = None) -> in
     Word wrapping uses the result before the actual inserted value is known.
 
     Args:
-        code (bytes): Complete F8 insertion token, including opcode and
-            operands.
+        code (bytes): Exactly one supported token: F8/0C with its saved-name
+            selector, F8/04 with its byte-count and address operands, or the
+            operand-free F8/12 and F8/18 item/opponent-name commands. Player
+            names reserve five characters; selector 02 reserves six for a Runner.
         name_width (int | None, optional): Pixel width of the longest translated
             item/opponent name. F8/12 and F8/18 use this value as their reserved
             advance. Supply a nonnegative integer measured by measure_name_width().
@@ -170,7 +177,11 @@ def measure_text_width(
     name_width: int | None = None,
 ) -> int:
     """
-    Measure text with worst-case dynamic insertion widths.
+    Measure total glyph advance with worst-case dynamic insertion widths.
+
+    Newlines and other non-drawing controls add zero; they do not reset the
+    accumulator. The result is the sum across the supplied buffer, not the width
+    of its widest line. Call separately for each line when testing window fit.
 
     Args:
         rom (bytes | bytearray): Font tables used to measure the encoded
@@ -231,7 +242,8 @@ def measure_name_width(rom: bytes | bytearray, names: Iterable[str]) -> int:
         rom (bytes | bytearray): Font tables used to measure literal glyphs.
         names (Iterable[str]): Nonempty collection of translated names. Each
             name must contain only literal glyphs; controls and newlines are
-            rejected. Supply a collection, not a single string.
+            rejected. Supply a collection, not a single string. An explicitly
+            supplied empty name has zero advance; an empty collection is invalid.
 
     Returns:
         int: Maximum summed glyph advance among the supplied names.

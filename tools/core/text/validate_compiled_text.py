@@ -19,7 +19,13 @@ from core.text import read_translation_files as script_files
 
 def verify_compiled_text(rom: bytes | bytearray) -> int:
     """
-    Validate all active translations in a compiled 4 MiB ROM.
+    Validate active translations' text-chain structure in a compiled 4 MiB ROM.
+
+    Load each source collection and omit skipped or empty-English entries.
+    Print each failed entry/reference with its diagnostic, then print bad N.
+    N counts failures, not unique entries: separate references can each fail.
+    An empty active set returns zero. Success covers these structural checks;
+    it does not compare compiled wording, font pixels, or gameplay reachability.
 
     Args:
         rom (bytes | bytearray): Compiled English ROM to validate; must
@@ -32,6 +38,9 @@ def verify_compiled_text(rom: bytes | bytearray) -> int:
 
     Raises:
         TypeError: rom is neither bytes nor bytearray.
+        OSError: A translation source cannot be opened or read.
+        ValueError: Source metadata or a stored reference cannot be resolved.
+        IndexError: A stored reference operand lies outside rom.
     """
     if not isinstance(cast(object, rom), (bytes, bytearray)):
         raise TypeError("Compiled ROM must be bytes or bytearray")

@@ -26,7 +26,9 @@ def get_capture_window(entry: str) -> tuple[int, int, tuple[int, int, int]]:
     Args:
         entry (str): Exactly six ASCII hexadecimal digits identifying the
             original text entry. Uppercase and lowercase are accepted; prefixes,
-            signs, whitespace, and other lengths are rejected.
+            signs, whitespace, and other lengths are rejected. IDs outside the
+            4 MiB ROM capacity are accepted if they have this form, and use
+            the default dialogue settings.
 
     Returns:
         tuple[int, int, tuple[int, int, int]]: Text-plane origin (x, y) in captured-frame

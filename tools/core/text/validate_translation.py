@@ -32,7 +32,11 @@ from core.text.read_translation_files import TextMode, TranslationEntry
 
 class EntryLayout(TypedDict):
     """
-    Resolved layout constraints shared by validation and compilation.
+    Resolved storage and display rules used when validating a source entry.
+
+    Created by derive_entry_layout_constraints() and consumed by
+    encode_entry_layout(). The latter uses the compiler's layout helpers, but
+    this record does not allocate ROM space or direct insertion itself.
 
     Attributes:
         mode (TextMode): Source mode code; see derive_entry_layout_constraints
@@ -156,15 +160,19 @@ def derive_entry_layout_constraints(e: TranslationEntry) -> EntryLayout:
             during compilation; validate width and the explicit row allowance.
 
     Args:
-        e (TranslationEntry): Source text, original slot bounds and optional
-            layout/control metadata.
+        e (TranslationEntry): Source entry with hexadecimal id/end bounds, jp
+            source text, and optional mode, w, and max_lines overrides. Pass
+            metadata loaded by read_translation_files.load(); this function
+            checks selected constraints rather than the complete metadata schema.
 
     Returns:
         EntryLayout: Resolved mode, width, row allowance, slot capacity and
             text-window category.
 
     Raises:
-        ValueError: The entry specifies an unsupported layout mode.
+        ValueError: The mode is unsupported, hexadecimal slot bounds are invalid
+            or reversed/outside LoROM, or an explicit w, max_lines, or
+            max_name_bytes is not a positive integer.
     """
     # Missing mode metadata selects the ordinary paginated dialogue layout.
     mode = e.get("mode", "v")
@@ -235,7 +243,9 @@ def encode_entry_layout(
         rom (bytes | bytearray): ROM containing the font tables used to
             measure glyphs and runtime name/number insertions.
         c (EntryLayout): Entry layout constraints. mode selects the encoding strategy;
-            width sets the wrapping or menu-column allowance.
+            width sets the wrapping or menu-column allowance. Obtain it with
+            derive_entry_layout_constraints(); this encoder does not validate the
+            constraint dictionary as a separate schema.
         out (list[str]): Existing validation diagnostics. A centered banner
             exceeding 240 pixels appends a message to this list.
         name_width (int | None, optional): Pixel reservation for F8/12 and F8/18
@@ -247,6 +257,12 @@ def encode_entry_layout(
     Returns:
         bytes | bytearray: Encoded text with the selected line breaks,
             page breaks and column padding.
+
+    Raises:
+        KeyError: A source character has no game encoding.
+        ValueError: Markup, tokens, widths, menu columns, or measured font
+            records are invalid, or an inserted item/opponent name has no width.
+        AssertionError: A word or menu label does not fit its assigned width.
     """
     mode = c["mode"]
 
@@ -281,6 +297,13 @@ def validate_translation_entry(
 ) -> list[str]:
     """
     Report source, command, byte-capacity and layout violations for one translation.
+
+    Use entries loaded by read_translation_files.load(), which validates their
+    metadata shapes. This function reports the encoding and display violations
+    it handles as strings; it is not a general schema validator for arbitrary
+    dictionaries. A truthy skip permits blank English but does not bypass the
+    other checks, so callers normally omit skipped entries. Entry and ROM bytes
+    are not changed, and an empty result does not establish translation accuracy.
 
     Args:
         e (TranslationEntry): Source text, original slot bounds and optional

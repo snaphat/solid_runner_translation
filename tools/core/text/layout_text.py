@@ -44,7 +44,10 @@ def wrap_text(
         rom (bytes | bytearray): Font tables used to fit words within
             max_w.
         text (str): English translation text, including supported
-            brace-delimited control markup.
+            brace-delimited control markup. Literal newlines end authored lines;
+            form feeds start new pages. Ordinary spaces supply wrap points, and
+            words are never split. Leading spaces on nonblank authored lines
+            are retained; a whitespace-only line becomes an empty line.
         max_w (int, optional): Positive integer maximum line width in pixels;
             booleans and other nonintegers are rejected.
         paginate (bool, optional): Enable automatic pagination when True;
@@ -61,7 +64,9 @@ def wrap_text(
 
     Raises:
         ValueError: max_w is not a positive integer, or a required system-name
-            width is absent or invalid. Booleans are not valid widths.
+            width is absent or invalid, a raw brace token is malformed, or a
+            measured command or font record is invalid. Booleans are not valid widths.
+        KeyError: A source character has no game encoding.
         TypeError: paginate is not a boolean.
         AssertionError: A wrapped line still exceeds its pixel-width allowance.
     """
@@ -137,12 +142,19 @@ def encode_vwf_line(line: str) -> bytes:
     font. A blank one-pixel FCF3 glyph switches the renderer to variable-width
     mode before the inserted text is drawn.
 
+    This encoder does not validate raw token structure or enforce line width;
+    wrap_text() performs those checks while laying out the complete text.
+
     Args:
         line (str): One decoded text line without a newline terminator.
 
     Returns:
         bytes: Encoded text with layout controls; no final FF terminator is
             added.
+
+    Raises:
+        KeyError: A source character has no game encoding.
+        ValueError: A raw hexadecimal brace token is malformed.
     """
     b = encode_text(line)
     if b[:1] == b"\xf8" and b[1:2] in (b"\x0c", b"\x12", b"\x18", b"\x04"):
@@ -167,8 +179,10 @@ def encode_menu_layout(
     Args:
         rom (bytes | bytearray): Font tables used to fit labels between
             menu columns.
-        text (str): English translation text, including supported
-            brace-delimited control markup.
+        text (str): One or more newline-separated rows of @column:label pairs.
+            Each row must begin with a marker and contain no text outside its
+            labels. Columns are nonnegative, unique, and increasing; labels must
+            be nonblank. Labels may contain brace-delimited game commands.
         cells_total (int | None, optional): Positive integer number of fixed-width
             cells reserved per menu row; booleans and other nonintegers are
             rejected. None uses a 99-cell final-label bound; earlier labels
@@ -186,7 +200,9 @@ def encode_menu_layout(
     Raises:
         ValueError: cells_total is neither None nor a positive integer (booleans
             are rejected), menu column markup is malformed, or a required
-            system-name width is absent or invalid.
+            system-name width is absent or invalid, or a raw token/font record
+            fails encoding or measurement.
+        KeyError: A label character has no game encoding.
         AssertionError: A label overlaps its predecessor or exceeds its
             assigned pixel width.
     """

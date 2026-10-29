@@ -22,7 +22,9 @@ def read_bank_resource_table(bank: int, *, rom: bytes | bytearray) -> list[int] 
     Read a plausible resource pointer table from a 32 KiB ROM bank.
 
     Table words are at least $8000. The table ends where its earliest resource
-    begins.
+    begins. This checks pointer-table shape only: entries may repeat or be out
+    of address order, and pointed-to bytes are not decompressed here. Use
+    read_resource_block() or iter_resource_blocks() to decode them.
 
     Args:
         bank (int): Zero-based 32 KiB ROM bank index, not an SNES bus-bank byte.
@@ -48,7 +50,7 @@ def read_bank_resource_table(bank: int, *, rom: bytes | bytearray) -> list[int] 
     k = 0
 
     # Pointers are little-endian CPU addresses within this 32 KiB bank. The
-    # first resource also marks the end of the pointer table.
+    # earliest referenced resource marks the end of the pointer table.
     while b0 + k * 2 < b0 + 0x8000 and 0x8000 + k * 2 < first:
         p = rom[b0 + k * 2] | rom[b0 + k * 2 + 1] << 8
         if p < 0x8000:
@@ -71,6 +73,9 @@ def iter_resource_blocks(rom: bytes | bytearray) -> Iterator[tuple[int, list[tup
     Scan complete 32 KiB banks only. A bank is accepted only when its pointer
     table is plausible and every listed resource decodes to at least 32 bytes,
     the size of one 4bpp tile. Smaller resources exclude the entire bank.
+    A partial final bank is ignored. Resource lengths need not be whole tiles,
+    and the scan does not determine their bit depth or prove they contain graphics.
+    Validation and decoding happen as the iterator advances.
 
     Args:
         rom (bytes | bytearray): ROM whose banks are scanned for resource
@@ -79,6 +84,10 @@ def iter_resource_blocks(rom: bytes | bytearray) -> Iterator[tuple[int, list[tup
     Yields:
         tuple[int, list[tuple[int, bytes]]]: Bank index and a list of
             (resource file offset, decompressed bytes) pairs in table order.
+
+    Raises:
+        TypeError: A scanned bank is read from a buffer other than bytes or bytearray.
+        ValueError: A scanned bank lies beyond the standard 4 MiB LoROM capacity.
     """
     for bank in range(len(rom) // 0x8000):
         t = read_bank_resource_table(bank, rom=rom)

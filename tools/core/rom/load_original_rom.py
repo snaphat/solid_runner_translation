@@ -34,7 +34,10 @@ SHA256 = "c8f453cba9f638967f7cea41a95106ac675a33861f5d3414fff9ffb44ec2f3d8"
 @cache
 def read_original_rom() -> bytes:
     """
-    Return cached immutable Japanese ROM bytes.
+    Read and hash-check the original Japanese ROM on the first successful call.
+
+    Later calls return the cached bytes even if the file has changed. Failed
+    reads or hash checks are not cached. This function never writes the input.
 
     Returns:
         bytes: Cached original Japanese ROM bytes with the required SHA-256.
@@ -42,6 +45,7 @@ def read_original_rom() -> bytes:
     Raises:
         ValueError: The original Japanese ROM SHA-256 differs from the required
             value.
+        OSError: The original ROM cannot be opened or read.
     """
     rom = PATH.read_bytes()
     if hashlib.sha256(rom).hexdigest() != SHA256:
@@ -56,6 +60,10 @@ def resolve_output_path(value: str | os.PathLike[str]) -> pathlib.Path:
     """
     Resolve a compiler destination while protecting the original ROM.
 
+    This is a path check, not a reservation: filesystem links can change after
+    it returns. The caller remains responsible for creating parent directories
+    and writing the output.
+
     Args:
         value (str | os.PathLike[str]): Requested .sfc destination; must
             not resolve or hard-link to the original ROM.
@@ -68,6 +76,7 @@ def resolve_output_path(value: str | os.PathLike[str]) -> pathlib.Path:
     Raises:
         ValueError: The destination is not .sfc or aliases the protected
             original ROM.
+        OSError: Path resolution or an existing-file identity check fails.
     """
     # Resolve path aliases first; samefile below also catches hard links to
     # the protected input ROM.

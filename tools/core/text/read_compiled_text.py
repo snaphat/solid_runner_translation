@@ -31,7 +31,12 @@ COMPUTER = 0x149B2A
 
 def resolve_message_start(offset: int) -> int:
     """
-    Locate an original slot's insertion start after repairs.
+    Locate the insertion start in the patched layout for an original text slot.
+
+    At COMPUTER ($149B2A), the patch reserves the slot's first byte for event
+    opcode 18, so return the following byte. All other offsets are unchanged.
+    This helper assumes the patched layout without reading a ROM; use
+    resolve_text_start() when the opcode must be checked in a supplied image.
 
     Args:
         offset (int): Zero-based byte offset in the unheadered ROM.
@@ -52,7 +57,12 @@ def resolve_message_start(offset: int) -> int:
 
 def resolve_text_start(rom: bytes | bytearray, offset: int) -> int:
     """
-    Skip the repaired computer show opcode when present in this ROM.
+    Locate text after the computer slot's show-text opcode when it is present.
+
+    Only COMPUTER ($149B2A) receives special treatment, and only when its first
+    byte is event opcode 18. All other valid offsets are returned unchanged.
+    Unlike resolve_message_start(), this works without assuming the patch
+    has already been applied.
 
     Args:
         rom (bytes | bytearray): ROM inspected for the repaired computer
@@ -80,7 +90,13 @@ def resolve_text_start(rom: bytes | bytearray, offset: int) -> int:
 
 class Reader:
     """
-    Inspect one caller-owned ROM buffer without changing it.
+    Inspect compiled text chains in one caller-owned ROM buffer.
+
+    Use trace_text_chain() for a terminator and traversal diagnostic,
+    validate_text_chain() for an entry's required end, or
+    validate_dialogue_segments() to compare renderer jumps with event scanning.
+    Malformed game text normally becomes a returned diagnostic; programmer
+    input errors such as a noninteger start are raised.
 
     Attributes:
         rom (Union[bytes, bytearray]): Caller-owned ROM buffer retained by
@@ -220,11 +236,17 @@ class Reader:
             end (int): Expected original terminator file offset; a negative value
                 requires a standalone FF terminator. Ignored in name mode n,
                 whose native copy loop always requires FF.
-            mode (str): Translation layout mode; n selects name-copy restrictions.
+            mode (str): One of v, p, n, f, m, or c. n selects name-copy
+                restrictions; the other modes share ordinary chain traversal.
+                An unsupported mode produces a diagnostic, not an exception.
 
         Returns:
             str | None: Validation diagnostic, or None when the text chain
                 satisfies the reader contract.
+
+        Raises:
+            TypeError: i is not an integer or is a boolean, or ordinary text
+                traversal receives a ROM that is not bytes or bytearray.
         """
         if mode not in ("v", "p", "n", "f", "m", "c"):
             return f"unsupported text mode: {mode!r}"
@@ -258,12 +280,18 @@ class Reader:
         at every segment.
 
         Args:
-            a (int): First dialogue segment file offset.
+            a (int): First dialogue segment file offset, at the text payload
+                after its show-text opcode (except for the special computer-slot
+                adjustment handled by resolve_text_start()).
             end (int): Required final original terminator file offset.
 
         Returns:
             str | None: Validation diagnostic, or None when the text chain
                 satisfies the reader contract.
+
+        Raises:
+            TypeError: The ROM is not bytes or bytearray, or a is not an integer
+                or is a boolean.
         """
         # The event interpreter and text renderer traverse relocation differently.
         # Each dialogue segment must bring both back to the same native terminator.
@@ -296,7 +324,11 @@ class Reader:
 
 def decode_literal_glyphs(rom: bytes | bytearray, start: int) -> tuple[list[int], int]:
     """
-    Decode the literal glyphs in one text page, following relocated-text jumps.
+    Decode literal glyphs through the first terminator, following text jumps.
+
+    Newlines and all F8 commands contribute no literal glyphs. Runtime names
+    are not expanded. The returned terminator may be FD, FE, or FF; it is not
+    included in the glyph list. No computer-slot adjustment is applied here.
 
     Args:
         rom (bytes | bytearray): ROM containing the encoded page and any
@@ -308,6 +340,8 @@ def decode_literal_glyphs(rom: bytes | bytearray, start: int) -> tuple[list[int]
             dynamic name insertions are excluded.
 
     Raises:
+        TypeError: rom is not bytes or bytearray, or start is not an integer
+            or is a boolean.
         ValueError: The text jump chain is cyclic.
         KeyError: An F8 command has no supported operand-length definition.
         IndexError: A glyph, command or followed jump reads beyond the ROM buffer.
@@ -335,6 +369,9 @@ def index_page_starts(rom: bytes | bytearray) -> dict[int, tuple[str, int]]:
     The index includes original slots and retargeted pointer/immediate starts,
     following relocated text and page continuations. Gameplay trace readers use
     it to identify which translated page the native text engine has started.
+    Active source records are loaded from every configured collection on each
+    call. Original slot ownership takes priority over aliases, and a separately
+    registered entry start retains page number one.
 
     Args:
         rom (bytes | bytearray): Compiled ROM whose dialogue chains are
@@ -343,6 +380,12 @@ def index_page_starts(rom: bytes | bytearray) -> dict[int, tuple[str, int]]:
     Returns:
         dict[int, tuple[str, int]]: Text-start offset to (entry ID, one-based page
             number).
+
+    Raises:
+        OSError: A translation source file cannot be read.
+        ValueError: Source metadata or a decoded text chain is invalid.
+        IndexError: An entry, operand, text token, or jump target is outside rom.
+        KeyError: A decoded page contains an unsupported F8 command.
     """
     entries = [
         e
@@ -352,6 +395,8 @@ def index_page_starts(rom: bytes | bytearray) -> dict[int, tuple[str, int]]:
     ]
     # Original slot ownership takes priority when a reference points into an
     # independently registered entry. Register every boundary before walking.
+    # Resolve the patched computer slot before assigning ownership so its
+    # leading event opcode cannot be mistaken for the first text glyph.
     own = {resolve_text_start(rom, int(e["id"], 16)): e["id"] for e in entries}
     for e in entries:
         for first in read_entry_references(rom, e):
@@ -372,14 +417,24 @@ def index_item_names(rom: bytes | bytearray) -> dict[int, tuple[str, list[int]]]
     """
     Index translated item names through their original item records.
 
-    Reads the 124 original item records at $83:8FE5, each 14 bytes long.
+    Reads the 124 original item records at $83:8FE5, each 14 bytes long, from
+    the hash-checked Japanese ROM. Only names with an active page-one source
+    entry are included. Glyphs come from the supplied compiled ROM; runtime
+    insertions are not expanded.
 
     Args:
         rom (bytes | bytearray): Compiled ROM containing the translated
             item-name strings.
 
     Returns:
-        dict[int, tuple[str, list[int]]]: Item number to (entry ID, literal glyph indices).
+        dict[int, tuple[str, list[int]]]: Zero-based item number (0 through 123)
+            to (entry ID, literal glyph indices), omitting unregistered names.
+
+    Raises:
+        OSError: The original ROM or a translation source cannot be read.
+        ValueError: The original-ROM hash, source metadata, or a text chain is invalid.
+        IndexError: A referenced entry or text token lies outside the compiled ROM.
+        KeyError: A decoded name contains an unsupported F8 command.
     """
     jp = original_rom.read_original_rom()
     starts = set(index_page_starts(rom).values())
@@ -409,6 +464,10 @@ def get_text_slot_ranges() -> list[tuple[int, int, str]]:
     Returns:
         list[tuple[int, int, str]]: Sorted (start offset, exclusive end offset,
             entry ID) records for non-skipped entries with English text.
+
+    Raises:
+        OSError: A translation source cannot be read.
+        ValueError: A collection fails source or metadata validation.
     """
     # Slot ownership excludes skipped and empty translations; sorting permits
     # address lookup even when translation collections use a different entry order.
@@ -427,15 +486,23 @@ def find_entry_text_starts(rom: bytes | bytearray, e: TextReferences) -> dict[in
 
     The ptrs metadata contains same-bank 16-bit references. The imm metadata
     contains separate low, high and bank-byte instruction operands.
+    The original slot is included first, even when compilation redirects its
+    references elsewhere. Duplicate target offsets appear only once.
 
     Args:
         rom (bytes | bytearray): Compiled ROM containing the entry slot
             and retargeted references.
-        e (TextReferences): Original slot ID and optional ptrs/imm operand offsets.
+        e (TextReferences): Original slot ID and optional ptrs/imm operand offsets
+            in the hexadecimal form checked by read_translation_files.load().
 
     Returns:
         dict[int, None]: Insertion-ordered unique text-start offsets as keys, with None
             values.
+
+    Raises:
+        ValueError: An ID or operand offset is malformed, or nonempty imm
+            metadata does not contain three distinct offsets.
+        IndexError: The original slot or a reference operand lies outside rom.
     """
     starts = [resolve_text_start(rom, int(e["id"], 16)), *read_entry_references(rom, e)]
     return dict.fromkeys(starts)
@@ -455,7 +522,9 @@ def read_entry_references(rom: bytes | bytearray, entry: TextReferences) -> list
         list[int]: Referenced text starts in metadata order, retaining duplicates.
 
     Raises:
-        ValueError: Nonempty imm metadata does not contain exactly three distinct offsets.
+        ValueError: A hexadecimal ID or operand offset is malformed, the slot
+            bank is outside LoROM capacity, or nonempty imm metadata does not
+            contain exactly three distinct offsets.
         IndexError: A reference operand falls outside the ROM.
     """
     slot = int(entry["id"], 16)
@@ -504,6 +573,8 @@ def iter_dialogue_pages(
         tuple[int, int, int]: One-based page number, start offset and terminator offset.
 
     Raises:
+        TypeError: rom is not bytes or bytearray, or a page start is not an
+            integer or is a boolean.
         ValueError: A page contains a cyclic relocation chain.
         IndexError: A page token or relocation target is outside the ROM.
         KeyError: A page contains an unsupported F8 command.
@@ -529,6 +600,11 @@ def index_page_terminators(rom: bytes | bytearray) -> dict[int, tuple[str, int, 
     """
     Index translated page terminators and their owning entries.
 
+    Load active records from all translation collections and resolve their
+    original and retargeted starts. walk_pages() keeps the first owner of a
+    shared terminator and retains valid pages before a malformed segment.
+    Source-load and reference-resolution failures still propagate.
+
     Args:
         rom (bytes | bytearray): Compiled ROM whose translated page
             terminators are indexed.
@@ -536,6 +612,11 @@ def index_page_terminators(rom: bytes | bytearray) -> dict[int, tuple[str, int, 
     Returns:
         dict[int, tuple[str, int, int]]: Terminator offset to (entry ID, one-based page
             number, text start).
+
+    Raises:
+        OSError: A translation source cannot be read.
+        ValueError: Source metadata or a reference cannot be resolved.
+        IndexError: An original slot or reference operand lies outside rom.
     """
     out: dict[int, tuple[str, int, int]] = {}
     starts: dict[int, str] = {}
@@ -568,8 +649,9 @@ def walk_pages(
     """
     Record the entry and page number owning each terminator in a text chain.
 
-    Preserve existing owners in out. Malformed chains stop indexing without
-    raising; pages added before the malformed segment remain in the index.
+    Preserve existing owners in out. ValueError, IndexError, and KeyError from
+    page traversal stop indexing without propagating; pages added before the
+    malformed segment remain in the index. Type errors are not suppressed.
 
     Args:
         rom (bytes | bytearray): ROM containing the page chain to add to
@@ -579,7 +661,12 @@ def walk_pages(
         out (dict[int, tuple[str, int, int]]): Mutable terminator-offset to
             (entry ID, page number, start offset) index.
         owners (dict[int, str] | None, optional): Text-start ownership map;
-            prevents a page continuation from claiming another entry.
+            prevents a page continuation from claiming another entry. None uses
+            no registered boundaries, so all decodable continuations are included.
+
+    Raises:
+        TypeError: rom is not bytes or bytearray, or at is not an integer
+            or is a boolean.
     """
     try:
         for page, start, end in iter_dialogue_pages(rom, at, owners or {}, entry):

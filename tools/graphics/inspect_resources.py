@@ -4,7 +4,8 @@ This command lists compressed graphics resources or exports their tiles as PNG p
 The scan subcommand prints candidate banks and decoded resource sizes. The
 sheets subcommand writes 2bpp and 4bpp tile-sheet images into the requested
 directory when the decoded byte count contains complete tiles at that depth.
-Resources with incomplete 2bpp tiles are reported on stderr and skipped. Both use the reusable graphics functions in core.graphics; the
+Resources with incomplete 2bpp tiles are reported on stderr and skipped.
+Both subcommands use the reusable graphics functions in core.graphics; the
 command handles argument parsing, original-ROM loading, and console output.
 
 Usage:
@@ -36,6 +37,13 @@ def run_cli() -> None:
     pointer tables or compressed resources fail its checks. Decoded resources
     whose sizes are not multiples of 16 bytes are reported on stderr and skipped.
     ROM-loading and output-file errors propagate to the caller.
+
+    Raises:
+        SystemExit: ArgumentParser handles --help (status zero) or rejects
+            missing/invalid arguments (status two).
+        ValueError: The original ROM does not match the required hash.
+        OSError: The original ROM cannot be read, or an output directory/file
+            cannot be created or written.
     """
     parser = argparse.ArgumentParser(description="Inspect and export native graphics resources.")
     commands = parser.add_subparsers(dest="command", required=True)

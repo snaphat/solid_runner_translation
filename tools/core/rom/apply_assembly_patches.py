@@ -59,6 +59,8 @@ def assemble_repair_blocks(name: str) -> dict[int, bytes]:
         TypeError: name is not a string.
         ValueError: name escapes asm/repairs, Asar fails, its output size changes,
             or the probe images reveal an input-dependent write.
+        OSError: Scratch-file creation, access, or cleanup fails, or Asar
+            cannot be started.
     """
     _validate_repair_name(name)
     repairs = (assemble_rom.ROOT / "asm" / "repairs").resolve()
@@ -116,6 +118,10 @@ def get_repair_ranges(name: str) -> list[tuple[int, int]]:
     """
     Return half-open file-offset write ranges for the named assembly repair.
 
+    Runs the same two full assembly probes as assemble_repair_blocks(); this
+    is not a source-code scan. Ranges are returned in ascending file-offset order
+    and adjacent written bytes belong to one range.
+
     Args:
         name (str): Repair path below asm/repairs without .asm, including
             events/ or interface/.
@@ -126,6 +132,7 @@ def get_repair_ranges(name: str) -> list[tuple[int, int]]:
     Raises:
         TypeError: name is not a string.
         ValueError: The source name or assembled output fails validation.
+        OSError: Scratch-file operations fail or Asar cannot be started.
     """
     return [(at, at + len(data)) for at, data in assemble_repair_blocks(name).items()]
 
@@ -149,7 +156,9 @@ def apply_assembly_repair(rom: bytearray, name: str) -> None:
     Raises:
         TypeError: rom is not a bytearray or name is not a string.
         ValueError: The candidate image is not exactly 4 MiB, or repair assembly
-            fails validation.
+            fails validation or the required original-ROM hash does not match.
+        OSError: The original ROM or scratch files cannot be accessed, cleanup
+            fails, or Asar cannot be started.
         AssertionError: A destination block differs from the original bytes or
             the expected FF expansion bytes.
     """

@@ -29,11 +29,15 @@ def replace_many(updates: Iterable[tuple[str | os.PathLike[str], bytes]]) -> Non
     Stages new contents and predecessor copies before replacement. A failed
     rollback retains recovery files and names their directory in the error.
     Individual replacements are atomic; the group is not atomic across a
-    process or operating-system crash.
+    process or operating-system crash. Use this for related source files on the
+    same filesystem: staging uses their common parent, and os.replace() cannot
+    move files across filesystems. Backups preserve file bytes or symlink targets,
+    not permissions, timestamps, or other filesystem metadata.
 
     Args:
         updates (Iterable[tuple[str | os.PathLike[str], bytes]]): Destination path and replacement
-            bytes pairs. Parents must exist; destination directory entries must be
+            bytes pairs, consumed once before staging. An empty iterable does nothing.
+            Parents must exist; destination directory entries must be
             distinct, including aliases through parent symlinks or junctions.
             A final-component symlink is replaced, not followed, and rollback
             restores the link itself even if its target is missing. Separate

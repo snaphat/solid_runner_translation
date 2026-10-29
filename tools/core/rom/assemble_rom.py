@@ -40,7 +40,10 @@ def resolve_asar_path() -> str:
 
 def create_scratch_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
     """
-    Stage assembler files below the project so their CLI paths can stay relative.
+    Create a temporary build directory for assembler inputs and outputs.
+
+    The directory exists when this function returns. Use the returned object
+    as a context manager to remove it on exit; build/ itself is retained.
 
     Args:
         prefix (str): Prefix for a temporary directory created below build/.
@@ -51,6 +54,7 @@ def create_scratch_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
 
     Raises:
         ValueError: The prefix contains a path separator or drive delimiter.
+        OSError: build/ or its temporary subdirectory cannot be created.
     """
     if "/" in prefix or "\\" in prefix or ":" in prefix:
         raise ValueError("Scratch directory prefix must not contain path separators")
@@ -70,15 +74,22 @@ def run_asar(
     are on its drive; paths on other drives remain absolute.
 
     Args:
-        source (str | os.PathLike[str]): Asar assembly source file.
+        source (str | os.PathLike[str]): Asar assembly source file. Relative paths
+            are interpreted from the Python process's current directory before
+            being expressed relative to the repository.
         image (str | os.PathLike[str]): Scratch ROM image that Asar may
-            modify.
+            modify. Relative paths follow the same current-directory rules
+            as source.
         *options: Additional Asar command-line arguments, each passed as one
-            argument.
+            argument without shell quoting or splitting. No shell is used.
 
     Returns:
         subprocess.CompletedProcess[str]: Asar exit status and captured UTF-8
             stdout/stderr; nonzero status is not raised here.
+
+    Raises:
+        OSError: The Asar process cannot be started or its working directory
+            cannot be accessed.
     """
 
     def format_path_argument(path: str | os.PathLike[str]) -> str:
@@ -127,6 +138,8 @@ def assemble_final_image(
     Raises:
         ValueError: Asar fails, or the candidate/final image has the wrong
             size.
+        OSError: Scratch files cannot be created, read, or removed, or Asar
+            cannot be started.
     """
     if len(rom) != SIZE:
         raise ValueError(f"Invalid pre-assembly ROM size: {len(rom)}; expected {SIZE}")

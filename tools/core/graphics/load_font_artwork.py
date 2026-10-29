@@ -99,6 +99,7 @@ def load_font_artwork(path: str | os.PathLike[str]) -> FontArtwork:
         OSError: The input file cannot be read.
         ValueError: JSON is malformed, keys repeat, sections are not objects,
             keys are empty, or artwork values have invalid types or bitmap shapes.
+        UnicodeError: The artwork file is not valid UTF-8.
     """
     raw: object = json.loads(
         Path(path).read_text(encoding="utf-8"), object_pairs_hook=_read_unique_artwork_object
@@ -135,6 +136,10 @@ G: dict[str, list[str]] = {}
 def register_glyph_artwork(ch: str, art: str) -> None:
     """
     Register eleven artwork rows under ch in G.
+
+    Replace an existing registration under the same key. Only G changes; this
+    does not update the JSON artwork, native punctuation registry, or ROM bytes.
+    All row checks finish before the registered value is replaced.
 
     Args:
         ch (str): Artwork character key stored in the module-level G table.

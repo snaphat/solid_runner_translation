@@ -33,6 +33,12 @@ def allocate_bank_tail(
     """
     Reserve bytes from the FF-filled tail of a 32 KiB ROM bank.
 
+    The first request scans the trailing FF run and leaves sixteen bytes before
+    its first usable byte. Keep free tied to this ROM and allocation pass; later
+    requests trust its cursors instead of rescanning. A failed first request may
+    still add that bank to free, but does not advance its reservation cursor.
+    A zero-byte request returns the cursor without consuming bytes.
+
     Args:
         rom (bytes | bytearray): ROM inspected for its FF-filled bank
             tail.
@@ -86,6 +92,11 @@ class Space:
     """
     Allocate ROM regions without crossing 32 KiB bank boundaries.
 
+    Regions are used in ascending order. A successful request consumes its bytes
+    and any earlier spans it had to skip; an unsuccessful request leaves the
+    allocator unchanged. The allocator neither examines existing ROM contents
+    nor writes bytes. The caller must supply ranges safe to overwrite.
+
     Attributes:
         free (int): Next available unheadered file offset in the active region.
         end (int): Exclusive end offset of the active region.
@@ -99,7 +110,10 @@ class Space:
 
         Args:
             regions (Iterable[tuple[int, int]]): Nonempty ordered half-open (start,
-                end) file-offset regions with integer bounds; copied before allocation.
+                end) regions with 0 <= start < end <= 0x400000. Regions must be
+                ascending and nonoverlapping; booleans are not bounds. The region
+                iterable is consumed once into a private list. Subsequent allocations
+                modify only that private list.
 
         Raises:
             ValueError: Allocation regions are empty, have noninteger bounds, are
@@ -122,6 +136,11 @@ class Space:
     def allocate(self, n: int) -> int:
         """
         Reserve n bytes and return their file offset.
+
+        If the current bank has insufficient space, try the next bank boundary,
+        then later configured regions. On success, earlier skipped spans are no
+        longer available through this allocator. Zero returns the current cursor
+        without advancing it.
 
         Args:
             n (int): Integer number of bytes to reserve, from 0 through 32768

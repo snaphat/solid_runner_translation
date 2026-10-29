@@ -52,13 +52,15 @@ def decompress(
         off (int): Zero-based byte offset in the unheadered ROM.
         limit (int, optional): Decoded-byte threshold checked before each
             command. A command may exceed it; the next iteration returns a
-            failure.
+            failure. Zero allows only an immediately empty stream.
         rom (bytes | bytearray): ROM containing the compressed resource
             at off.
 
     Returns:
         tuple[bytes | None, int]: Decoded bytes and next source offset; decoded data is None on a
-            bounded-scan, truncated-command or invalid-backreference failure.
+            bounded-scan, truncated-command or invalid-backreference failure. On
+            success the offset is just after the 00 terminator. On failure it
+            identifies the next unprocessed command, which may lie beyond the buffer.
 
     Raises:
         TypeError: rom is not bytes or bytearray.
@@ -102,9 +104,13 @@ def decompress(
 
 def compress(data: bytes | bytearray) -> bytes:
     """
-    Compress a resource using greedy backreference selection.
+    Compress a resource by immediately taking the longest available backreference.
 
     Backreferences reach 256 bytes behind the cursor and copy 3–130 bytes.
+    Equal-length matches use the nearest distance. Bytes without a three-byte
+    match are collected into literal runs of at most 127 bytes. This local choice
+    does not guarantee a minimum-size stream; use compress_optimal() when fitting
+    a replacement into a fixed ROM allocation.
 
     Args:
         data (bytes | bytearray): Uncompressed resource bytes; read
@@ -167,6 +173,8 @@ def compress_optimal(data: bytes) -> bytes:
     Computes minimum suffix costs from right to left over literal runs and
     backreferences. Equal costs prefer a literal run over a backreference.
     Among backreferences, ties prefer the shortest copy, then the nearest match.
+    Encoded results are cached by complete input bytes for the life of the process,
+    with no size limit. Repeated inputs reuse the encoded stream.
 
     Args:
         data (bytes): Uncompressed resource bytes; immutable input is required
