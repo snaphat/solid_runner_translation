@@ -1,17 +1,16 @@
 """
 This module adds tracing code to ROM data so verification can record text commands, terminators, and glyph draws in cartridge SRAM.
 
-The builder writes the supplied ROM data to a temporary instrumented.sfc file,
-adds tracing code with Asar, and returns the resulting file contents as bytes.
-The temporary file is removed when the assembly context exits.
-The hooks execute the instructions they replace as well as recording trace
-data; this does not by itself establish that instrumentation preserves every
-aspect of game behavior.
+build_instrumented_rom() writes the supplied data to a temporary instrumented.sfc file, adds
+tracing code with Asar, and returns the resulting file contents as bytes. The temporary file is
+removed when assembly finishes. The tracing code also executes the game instructions it
+replaces; this does not by itself establish that instrumentation preserves every aspect of game
+behavior.
 
-All trace data lives in added cartridge SRAM: the modified ROM header declares 128 KiB
-instead of the game's 8 KiB ($70:0000-$70:1FFF). This keeps trace writes out of
-game-owned memory. Scenes use much of WRAM, including $7E8000-$7EAFFF, for buffers;
-menus also reuse $7E1F00-$7E1F7F. Offsets in save RAM:
+All trace data lives in added cartridge SRAM: the modified ROM header declares 128 KiB instead
+of the game's 8 KiB ($70:0000-$70:1FFF). This keeps trace writes out of game-owned memory.
+Scenes use much of WRAM, including $7E8000-$7EAFFF, for buffers; menus also reuse
+$7E1F00-$7E1F7F. Offsets in save RAM:
 
   TRACE $FF00 ($71:7F00), counters:
     +04-06  text pointer when the event interpreter starts a text command ($81:C960)
@@ -25,6 +24,17 @@ menus also reuse $7E1F00-$7E1F7F. Offsets in save RAM:
     script position (3)
   GLYPHS $18000 ($73:0000), 12 bytes per glyph: font offset (2), VWF x before (2), cell column,
     line, text bank, VWF x after (2), cell column after, line after
+  DISPLAY $1B000 ($73:3000), most recent frame:
+    +000-05F  host copy of frame WRAM $0100-$015F (applied background registers)
+    +060      NMI display flags from direct page $17; +061 validity marker $D7
+    +062-063  HDMA enable mask and channels disabled by the first IRQ
+    +064      invalid IRQ sequence
+    +100+16*H IRQ slot for even handler H, zero through ten: valid, scanline,
+              BG3 horizontal-scroll operand (2), BG1 scroll operand (2)
+    +1C0-1C1  first-IRQ visibility restore: valid and programmed scanline
+    +200-27F  host copy of core HDMA register mirrors, sixteen bytes per channel
+    +400-23FF eight 1 KiB HDMA streams: line counter followed by copied payloads;
+              copied by Python from the frame RAM/ROM snapshot, not read by CPU hooks
 """
 
 from __future__ import annotations
@@ -359,6 +369,133 @@ draw_log:
     RTS
 """
 
+# Display trace metadata occupies unused expanded SRAM after the glyph log.
+# NMI/IRQ hooks record only flags and handler transitions. The host combines
+# these with frame-synchronous RAM and core register snapshots for pixel checks.
+DISPLAY = 0x1B000
+DISPLAY_FREE = (0x007000, 0x007400)
+DISPLAY_SITES = {
+    0x000373: bytes.fromhex("9C2121A52E"),
+    0x00070D: bytes.fromhex("2035878005"),
+    0x000712: bytes.fromhex("A61AFC2387"),
+}
+DISPLAY_ASM = """
+org $808373
+    JSL display_frame
+    NOP
+org $80870D
+    JML display_enable
+    NOP
+org $808712
+    JSL display_irq
+    NOP
+org $80F000
+; NMI: record flags and reset IRQ validity slots, preserving all registers.
+; The host reads applied PPU shadows from the captured frame RAM. No CPU-side
+; HDMA table copying is performed; it would change display timing.
+display_frame:
+    PHP
+    REP #$30
+    PHA
+    PHX
+    PHY
+    SEP #$20
+    LDA $00002A
+    STA $733062
+    LDA $00002B
+    STA $733063
+    LDA $000017
+    STA $733060
+    LDA #$00
+    STA $733064
+    STA $7331C0
+    ; Clear each even handler's validity byte directly. An eight-bit TXA
+    ; followed by sixteen-bit TAX would retain A's hidden high byte.
+    STA $733100
+    STA $733120
+    STA $733140
+    STA $733160
+    STA $733180
+    STA $7331A0
+    LDA #$D7
+    STA $733061
+    REP #$30
+    PLY
+    PLX
+    PLA
+    PLP
+    STZ $2121
+    LDA $2E
+    RTL
+; First IRQ restores main/subscreen visibility after the NMI blanking interval.
+; The original BRA continuation is reproduced with JML after the bank-local JSR.
+display_enable:
+    PHP
+    REP #$20
+    PHA
+    SEP #$20
+    LDA $000140
+    STA $7331C1
+    LDA #$01
+    STA $7331C0
+    REP #$20
+    PLA
+    PLP
+    JSR $8735
+    JML $808717
+; IRQ: execute in bank $80 so the original indexed JSR retains its call bank.
+; Each even handler ID gets a sixteen-byte slot. A repeated/unknown handler
+; invalidates the frame instead of silently replacing its earlier settings.
+display_irq:
+    PHP
+    REP #$30
+    PHA
+    PHX
+    SEP #$20
+    LDA $00001A
+    CMP #$0B
+    BCS .invalid
+    BIT #$01
+    BNE .invalid
+    REP #$20
+    AND #$00FF
+    ASL A
+    ASL A
+    ASL A
+    ASL A
+    TAX
+    SEP #$20
+    LDA $733100,X
+    BNE .invalid
+    LDA $00001B
+    STA $733101,X
+    LDA $001A2F
+    STA $733102,X
+    LDA $001A30
+    STA $733103,X
+    LDA $000070
+    STA $733104,X
+    LDA $000071
+    STA $733105,X
+    LDA #$01
+    STA $733100,X
+    BRA .restore
+.invalid:
+    LDA #$01
+    STA $733064
+.restore:
+    REP #$30
+    PLX
+    PLA
+    PLP
+    LDX $1A
+    JSR ($8723,X)
+    RTL
+
+warnpc $80F400
+"""
+
+
 # Assembly fragment omitted in accumulating mode so glyph history survives text starts.
 RESET = """    LDA #$00
     STA $717F20
@@ -377,20 +514,24 @@ def build_instrumented_rom(
     """
     This function returns ROM data with added code that records game text and display state.
 
-    With glyph_log disabled, installs only text-start and page-end hooks for the Japanese
-    reader. Accumulation preserves menu glyphs drawn before a dialogue page restarts its trace.
+    Text-start, page-end and display-state hooks are always installed. Disabling
+    glyph_log omits the English glyph-draw hook for the Japanese reader.
+    Accumulation preserves menu glyphs drawn before a
+    dialogue page restarts its trace.
 
     Args:
-        release (bytes | bytearray): Uninstrumented release or original ROM; never modified in
-            place.
-        glyph_log (bool, optional): Enable glyph-read instrumentation used for English pixel
-            checks. Defaults to True.
-        accumulate (bool, optional): Retain glyph-read history across text draws for
-            interface-screen checks. Defaults to False.
+        release (bytes | bytearray): Uninstrumented release or original ROM; never modified
+            in place.
+        glyph_log (bool, optional): Enable glyph-read instrumentation used for
+            English pixel checks.
+            Defaults to True.
+        accumulate (bool, optional): Retain glyph-read history across text
+            draws for interface-screen checks.
+            Defaults to False.
 
     Returns:
-        bytes: ROM contents with tracing routines and a header declaring the additional
-            cartridge SRAM used by those routines.
+        bytes: ROM contents with tracing routines and a header declaring the
+            additional cartridge SRAM used by those routines.
 
     Raises:
         ValueError: If the image does not contain the complete reserved hook range, hook
@@ -406,7 +547,7 @@ def build_instrumented_rom(
 
     # Refuse hook sites whose instructions changed, rather than overwriting
     # unknown code with instrumentation built for a different reader.
-    for at, expected in SITES.items():
+    for at, expected in (SITES | DISPLAY_SITES).items():
         if release[at : at + len(expected)] != expected:
             raise ValueError(f"Hook site {at:06X} no longer holds the original instruction")
 
@@ -416,7 +557,12 @@ def build_instrumented_rom(
     if any(b != 0xFF for b in release[FREE[0] : FREE[1]]):
         raise ValueError("$84:F000 is no longer free")
 
+    if any(b != 0xFF for b in release[DISPLAY_FREE[0] : DISPLAY_FREE[1]]):
+        raise ValueError("$80:F000 display-hook space is not free")
+
     asm = ASM.replace("{reset}", "" if accumulate else RESET)
+
+    asm += DISPLAY_ASM
 
     # Only the English renderer provides the VWF draw hook. Japanese scans
     # retain text-start and terminator hooks without that glyph hook.

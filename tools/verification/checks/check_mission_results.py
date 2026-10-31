@@ -24,6 +24,7 @@ from core.text.read_compiled_text import decode_literal_glyphs
 from emulator.snes9x_core import Emu
 from verification.evidence import check_screen_pixels as screen_ink
 from verification.evidence import instrument_rom as instrument
+from verification.evidence.read_text_layers import capture_text_layers
 from verification.game.emulator_session import GameSession
 
 # Number of records in the game's mission-results table; indices run from 0 to 16.
@@ -101,8 +102,9 @@ def run_cli() -> None:
     Raises:
         SystemExit: If CLI arguments are invalid or an output aliases the input ROM.
         OSError: If input/output paths cannot be accessed or output files cannot be written.
-        AssertionError: If a mission result violates expected text, layout, DMA transfer,
-            reward-counting or footer invariants.
+        AssertionError: If mission text or pixels fail comparison, the reward or total-funds DMA
+            data is incorrect, reward counting does not finish, or the instrumented and ordinary
+            ROM screens differ.
         RuntimeError: If ROM/state loading, startup, or required frame snapshots fail.
         ValueError: If instrumentation, source metadata, text chains, glyphs or frame data are
             invalid.
@@ -130,12 +132,13 @@ def run_cli() -> None:
             enter(game.emu, state, index)
             game.clear_trace()
             game.emu.run(653)
-            records = instrument.read_terminator_log(game.S)
+            frame_sram = game.emu.read_frame_memory(0)
+            records = instrument.read_terminator_log(frame_sram)
             if not (len(records) == 9):
                 raise AssertionError(f"Mission {index}: expected 9 text records, found {len(records)}")
 
             reward_glyphs = instrument.read_glyph_log(
-                game.S, records[4]["draw_end"], records[5]["draw_end"]
+                frame_sram, records[4]["draw_end"], records[5]["draw_end"]
             )
             reward_expected, _ = decode_literal_glyphs(
                 rom, convert_snes_to_file(records[5]["start"])
@@ -151,7 +154,7 @@ def run_cli() -> None:
             v = game.emu.read_vram_bytes()
             reward_tiles = v[0xD800:0xD860] + v[0xD900:0xD960]
             footer_glyphs = instrument.read_glyph_log(
-                game.S, records[6]["draw_end"], records[7]["draw_end"]
+                frame_sram, records[6]["draw_end"], records[7]["draw_end"]
             )
             checks: list[dict[str, Any]] = []
             start = 0
@@ -159,17 +162,26 @@ def run_cli() -> None:
             # Prefix, title, Complete, Report:, summary. Reward and total have
             # colored glyphs/runtime numbers and are checked separately below.
             for record in records[:5]:
-                glyphs = instrument.read_glyph_log(game.S, start, record["draw_end"])
+                glyphs = instrument.read_glyph_log(frame_sram, start, record["draw_end"])
                 start = record["draw_end"]
                 expected, _ = decode_literal_glyphs(rom, convert_snes_to_file(record["start"]))
                 if not ([g["font_offset"] // 22 for g in glyphs] == expected):
                     raise AssertionError(f"Mission {index}: captured glyphs do not match text record {record!r}")
 
                 check = screen_ink.check_screen_pixels(
-                    rom, glyphs, game.emu.read_rgb_rows(), game.emu.read_vram_bytes()
+                    rom,
+                    glyphs,
+                    game.emu.read_rgb_rows(),
+                    game.emu.read_frame_memory(3),
+                    layers=capture_text_layers(
+                        rom,
+                        game.emu.read_frame_memory(0),
+                        game.emu.read_frame_memory(2),
+                        game.emu.read_frame_registers(),
+                    ),
                 )
-                if not (check["outside_ink"] == check["missing_screen_ink"] == 0):
-                    raise AssertionError((index, check))
+                if not check["passed"]:
+                    raise AssertionError(f"Mission {index}: text pixel comparison failed: {check!r}")
 
                 checks.append(check)
 
@@ -237,10 +249,19 @@ def run_cli() -> None:
             game.emu.run(60)
             elapsed += 60
             footer = screen_ink.check_screen_pixels(
-                rom, footer_glyphs, game.emu.read_rgb_rows(), game.emu.read_vram_bytes()
+                rom,
+                footer_glyphs,
+                game.emu.read_rgb_rows(),
+                game.emu.read_frame_memory(3),
+                layers=capture_text_layers(
+                    rom,
+                    game.emu.read_frame_memory(0),
+                    game.emu.read_frame_memory(2),
+                    game.emu.read_frame_registers(),
+                ),
             )
-            if not (footer["outside_ink"] == footer["missing_screen_ink"] == 0):
-                raise AssertionError((index, "footer", footer))
+            if not footer["passed"]:
+                raise AssertionError(f"Mission {index}: total-funds footer pixel comparison failed: {footer!r}")
 
             v = game.emu.read_vram_bytes()
             if not (v[55296:55392] + v[55552:55648] == reward_tiles):

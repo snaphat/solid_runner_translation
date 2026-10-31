@@ -1,11 +1,13 @@
 """
 This module runs the Snes9x libretro core without a display window and exposes controller input, frames, memory, and save states.
 
-The wrapper retains native callbacks and ROM buffers, advances controller input,
-copies video frames, reads memory snapshots and serializes compatible save states.
-Memory reads return independent bytes; poke performs bounded native writes.
-GameSession manages ROM loading, core shutdown and the live memory views used by
-gameplay verification. Direct users must unload the ROM and deinitialize the core.
+The wrapper retains native callbacks and ROM buffers, advances controller input, copies video
+frames, reads memory snapshots and serializes compatible save states. Memory reads return
+independent bytes; poke performs bounded native writes. Each captured frame also retains SRAM,
+WRAM and VRAM snapshots from its video callback, so pixel checks do not pair an image with
+memory read later in emulation. GameSession manages ROM loading, core shutdown and the live
+memory views used by gameplay verification. Direct users must unload the ROM and deinitialize
+the core.
 
 Usage from Python:
     from emulator.snes9x_core import Emu
@@ -74,6 +76,96 @@ def _build_rgb_lookup(fmt: int) -> list[bytes]:
     return TABLES[fmt]
 
 
+def read_snapshot_blocks(raw: bytes) -> dict[str, bytes]:
+    """
+    Read named blocks from the pinned Snes9x core's version-12 save-state format.
+
+    Args:
+        raw (bytes): Complete uncompressed state returned by Snes9x 1.63's
+            retro_serialize API. Other formats and snapshot versions are rejected.
+
+    Returns:
+        dict[str, bytes]: Three-letter block tags mapped to independent byte payloads.
+
+    Raises:
+        TypeError: If raw is not bytes.
+        ValueError: If the snapshot version is unsupported, a block header is malformed, a block
+            is truncated, or a block tag occurs more than once.
+    """
+    if not isinstance(cast(object, raw), bytes):
+        raise TypeError("Snes9x snapshot must be bytes")
+    magic = b"#!s9xsnp:0012\n"
+    if not raw.startswith(magic):
+        raise ValueError("Expected a Snes9x version-12 snapshot")
+    blocks: dict[str, bytes] = {}
+    offset = len(magic)
+    while offset < len(raw):
+        header = raw[offset : offset + 11]
+        if (
+            len(header) != 11
+            or header[3:4] != b":"
+            or header[10:11] != b":"
+            or not header[4:10].isdigit()
+        ):
+            raise ValueError("Invalid Snes9x snapshot block header")
+        if not all(65 <= value <= 90 for value in header[:3]):
+            raise ValueError("Invalid Snes9x snapshot block tag")
+        tag = header[:3].decode("ascii")
+        size = int(header[4:10])
+        offset += 11
+        if tag in blocks or offset + size > len(raw):
+            raise ValueError("Duplicate or truncated Snes9x snapshot block")
+        blocks[tag] = raw[offset : offset + size]
+        offset += size
+    return blocks
+
+
+def decode_dma_configuration(raw: bytes) -> bytes:
+    """
+    Decode the pinned core's saved DMA channels into eight register-sized slots.
+
+    Snes9x serializes DMA state separately from FillRAM. Its version-12 DMA block has eight
+    nineteen-byte records; two-byte integers are big-endian. Each returned sixteen-byte slot
+    supplies configuration registers $43n0-$43n7. The remaining eight bytes are zero and do not
+    represent live transfer counters.
+
+    Args:
+        raw (bytes): Complete 152-byte DMA block from a version-12 core snapshot.
+
+    Returns:
+        bytes: Eight sixteen-byte slots in channel order, with register-order
+            little-endian addresses and the original control-bit assignments.
+
+    Raises:
+        ValueError: If the DMA block does not contain eight 19-byte records or a record
+            specifies a transfer mode outside 0 through 7.
+    """
+    if len(raw) != 152:
+        raise ValueError("Expected eight nineteen-byte Snes9x DMA records")
+    out = bytearray(128)
+    for channel in range(8):
+        record = raw[channel * 19 : (channel + 1) * 19]
+        if record[5] > 7:
+            raise ValueError("Invalid Snes9x DMA transfer mode")
+        control = record[5]
+        for index, bit in ((0, 7), (1, 6), (2, 5), (3, 3), (4, 4)):
+            control |= bool(record[index]) << bit
+        start = channel * 16
+        out[start : start + 8] = bytes(
+            (
+                control,
+                record[6],
+                record[8],
+                record[7],
+                record[9],
+                record[11],
+                record[10],
+                record[12],
+            )
+        )
+    return bytes(out)
+
+
 class GameInfo(C.Structure):
     """
     ctypes layout of retro_game_info.
@@ -121,6 +213,12 @@ class Emu:
             emulated frame.
         fmt (int): Current libretro pixel format: 0 is 0RGB1555, 1 XRGB8888,
             and 2 RGB565. Each captured frame stores its own format value.
+        frame_memory (dict[int, bytes]): Independent SRAM (0), WRAM (2) and VRAM (3)
+            snapshots copied with the retained video frame, not live emulator memory.
+        capture_registers (bool): Enable version-12 core snapshots during video
+            callbacks to retain register memory and DMA configuration without emulated reads.
+        frame_registers (bytes | None): Captured register memory with decoded DMA slots;
+            None until a captured frame supplies register data.
         frame (tuple[bytes, int, int, int, int] | None): Retained raw pixel bytes,
             width, height, byte pitch, and format; None before the first video callback.
     """
@@ -143,6 +241,10 @@ class Emu:
         self.lib = C.CDLL(os.fspath(core))
         self.fmt = 0  # 0=0RGB1555, 1=XRGB8888, 2=RGB565
         self.frame: tuple[bytes, int, int, int, int] | None = None
+        self.frame_memory: dict[int, bytes] = {}
+        self.capture_registers = False
+        self.frame_registers: bytes | None = None
+        self._frame_capture_error: str | None = None
         self.held: set[int] = set()
         self._sysdir = C.c_char_p(os.path.dirname(os.path.abspath(rom)).encode())
 
@@ -159,6 +261,9 @@ class Emu:
             STATE_CB(self._read_controller_state),
         ]
         L = self.lib
+        L.retro_get_memory_data.restype = C.c_void_p
+        L.retro_get_memory_size.restype = C.c_size_t
+        L.retro_serialize_size.restype = C.c_size_t
         L.retro_set_environment(self._cbs[0])
         L.retro_set_video_refresh(self._cbs[1])
         L.retro_set_audio_sample(self._cbs[2])
@@ -176,10 +281,6 @@ class Emu:
             L.retro_deinit()
             raise RuntimeError("Emulator could not load the ROM")
 
-        L.retro_get_memory_data.restype = C.c_void_p
-        L.retro_get_memory_size.restype = C.c_size_t
-        L.retro_serialize_size.restype = C.c_size_t
-
     def reload_rom(self, image: bytes) -> None:
         """
         Replace the loaded cartridge while keeping its native buffer alive.
@@ -187,7 +288,8 @@ class Emu:
         The input is validated and its backing buffer is allocated before unloading the current
         cartridge. Preparation failures leave the current cartridge and retained buffers
         unchanged. Once unloading starts, existing memory views become invalid and must be
-        reacquired by the caller.
+        reacquired by the caller. The retained video frame and its memory snapshots are cleared
+        when the old ROM is unloaded.
 
         Args:
             image (bytes): Complete replacement ROM contents retained for the cartridge
@@ -208,6 +310,10 @@ class Emu:
         buffer = C.create_string_buffer(image, len(image))
         info = GameInfo(b"scratch.sfc", C.cast(buffer, C.c_void_p), len(image), None)
         self.lib.retro_unload_game()
+        self.frame = None
+        self.frame_memory = {}
+        self.frame_registers = None
+        self._frame_capture_error = None
 
         # The core may retain the replacement pointer even after loading returns.
         self._rom, self._buf = image, buffer
@@ -256,11 +362,15 @@ class Emu:
 
     def _receive_video(self, data: int | None, w: int, h: int, pitch: int) -> None:
         """
-        Copy a native video frame into retained Python storage.
+        Copy a video frame and its SRAM, WRAM, and VRAM snapshots into Python storage.
+
+        Snapshot errors are caught because exceptions cannot cross the native callback.
+        The frame remains stored, its memory snapshots are cleared, and later snapshot
+        readers report the saved error.
 
         Args:
             data (int | None): Frame pixel pointer; null means a duplicate
-                frame and leaves the stored frame unchanged.
+                frame and leaves the stored frame and paired memory unchanged.
             w (int): Frame width in pixels.
             h (int): Frame height in scanlines.
             pitch (int): Native byte stride between scanlines; h * pitch bytes are
@@ -268,6 +378,34 @@ class Emu:
         """
         if data:  # keep the raw frame; convert only when a screenshot is taken
             self.frame = (C.string_at(data, h * pitch), w, h, pitch, self.fmt)
+            # Copy memory at the video callback: the CPU can change VRAM
+            # and SRAM again before retro_run returns to the caller.
+            self._frame_capture_error = None
+            self.frame_registers = None
+            try:
+                if self.capture_registers:
+                    # Serialization copies the core's register mirrors without
+                    # executing any emulated CPU instructions or reading MMIO.
+                    blocks = read_snapshot_blocks(self.save_state())
+                    self.frame_memory = {
+                        0: blocks["SRA"][: self.lib.retro_get_memory_size(0)],
+                        2: blocks["RAM"],
+                        3: blocks["VRA"],
+                    }
+                    registers = bytearray(blocks["FIL"])
+                    if len(registers) != 0x8000:
+                        raise ValueError("Incomplete Snes9x register snapshot")
+                    registers[0x4300:0x4380] = decode_dma_configuration(blocks["DMA"])
+                    self.frame_registers = bytes(registers)
+                else:
+                    self.frame_memory = {
+                        region: self.read_memory_bytes(region) for region in (0, 2, 3)
+                    }
+            except Exception as error:
+                # Exceptions cannot propagate through a ctypes callback. Revoke
+                # the evidence and raise from the public snapshot readers instead.
+                self.frame_memory = {}
+                self._frame_capture_error = str(error)
 
     def read_rgb_rows(self) -> list[bytes]:
         """
@@ -397,6 +535,52 @@ class Emu:
         p = self.lib.retro_get_memory_data(id_)
         n = self.lib.retro_get_memory_size(id_)
         return C.string_at(p, n) if p else b""
+
+    def read_frame_memory(self, id_: int) -> bytes:
+        """
+        Return memory copied at the same callback as the retained screenshot.
+
+        These snapshots pair memory with the retained image; read_memory_bytes instead
+        reads the core's current state, which may have advanced past the video callback.
+        Save-state restoration retains the old screenshot and its snapshots until a new
+        frame arrives. ROM reload clears both.
+
+        Args:
+            id_ (int): Captured libretro memory region: zero for SRAM, two for WRAM or three for VRAM.
+
+        Returns:
+            bytes: Independent, immutable memory snapshot paired with the current image.
+
+        Raises:
+            ValueError: If the region is not SRAM/WRAM/VRAM, or is not an integer.
+            RuntimeError: If no video callback has captured the requested snapshot yet.
+        """
+        if type(id_) is not int or id_ not in (0, 2, 3):
+            raise ValueError("Frame memory is available only for SRAM (0), WRAM (2) and VRAM (3)")
+        if id_ not in self.frame_memory:
+            raise RuntimeError(self._frame_capture_error or "No frame memory has been captured")
+        return self.frame_memory[id_]
+
+    def read_frame_registers(self) -> bytes:
+        """
+        Return frame register memory with decoded DMA-channel configuration.
+
+        Register data is available only after a video callback with capture_registers
+        enabled. It comes from the pinned core's serialization format; the returned
+        bytes are register mirrors, not values obtained by reading write-only emulated
+        PPU registers. The $4300-$437F range is synthesized from the snapshot's separate
+        DMA block; FillRAM itself does not contain the DMA channel configuration.
+
+        Returns:
+            bytes: A 32 KiB FillRAM copy paired with the image, with $43n0-$43n7
+                populated from saved DMA state and each channel's remaining bytes zero.
+
+        Raises:
+            RuntimeError: If the retained frame has no register data, or capturing it failed.
+        """
+        if self.frame_registers is None:
+            raise RuntimeError(self._frame_capture_error or "No frame registers have been captured")
+        return self.frame_registers
 
     def read_wram_bytes(self) -> bytes:
         """
