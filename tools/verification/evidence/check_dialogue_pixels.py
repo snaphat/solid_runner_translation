@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence, cast
 
+from core.validation.validate_integers import is_integer
 from verification.evidence.instrument_rom import GlyphRecord
 from verification.evidence.reconstruct_text_ink import (
     MAIN_FONT as MAIN_FONT,
@@ -44,9 +45,9 @@ def reconstruct_dialogue_ink(
             dialogue glyphs.
         glyphs (Iterable[GlyphRecord]): Instrumented glyph records containing font offsets
             and text-buffer drawing coordinates.
-        height (int, optional): Nonnegative built-in int text-plane height in pixels;
-            booleans and int subclasses are rejected. Its width is fixed
-            at 240; zero clips all ink.
+        height (int, optional): Nonnegative integer text-plane height in pixels;
+            integer subclasses are accepted and booleans are rejected.
+            Its width is fixed at 240; zero clips all ink.
             Defaults to 48.
 
     Returns:
@@ -55,10 +56,11 @@ def reconstruct_dialogue_ink(
             outside that buffer.
 
     Raises:
-        ValueError: If height is not a nonnegative built-in int, or a glyph points outside the ROM
-            font data.
+        ValueError: If height is a boolean, noninteger or negative, a glyph cursor
+            field or font offset is a boolean or noninteger, or a glyph
+            selects a negative or incomplete ROM font record.
     """
-    if type(height) is not int or height < 0:
+    if (not is_integer(height)) or height < 0:
         raise ValueError("Text-plane height must be a nonnegative integer")
 
     ink: set[tuple[int, int]] = set()
@@ -87,6 +89,9 @@ def count_missing_dialogue_pixels(
     """
     Count expected ink pixels missing from or outside the frame.
 
+    Origins, ink coordinates and thresholds must be integers. Integer subclasses are accepted;
+    booleans are rejected.
+
     Args:
         rows (Sequence[bytes]): Frame scanlines of packed 8-bit RGB pixels.
             Every sampled row must contain 256 complete RGB pixels; this helper
@@ -105,14 +110,19 @@ def count_missing_dialogue_pixels(
             count.
 
     Raises:
-        ValueError: If threshold is not a three-element tuple of integer RGB cutoffs in 0-255,
+        ValueError: If an origin or ink coordinate is a boolean or noninteger, or
+            threshold is not a three-element tuple of integer RGB cutoffs in 0-255
             excluding booleans, or a sampled pixel lacks three RGB bytes.
     """
+    if not is_integer(dx) or not is_integer(dy):
+        raise ValueError("dx, dy must be integers, not booleans")
+    if any(len(point) != 2 or any(not is_integer(value) for value in point) for point in ink):
+        raise ValueError("Ink coordinates must be pairs of integers, not booleans")
     # Reject malformed RGB tuples before sampling, including when ink is empty.
     if (
         not isinstance(cast(object, threshold), tuple)
         or len(threshold) != 3
-        or any(type(channel) is not int or not 0 <= channel <= 255 for channel in threshold)
+        or any((not is_integer(channel)) or not 0 <= channel <= 255 for channel in threshold)
     ):
         raise ValueError("RGB brightness thresholds must be three integers in 0-255")
     # Count pixels outside the captured frame separately from in-frame pixels

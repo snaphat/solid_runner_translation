@@ -33,8 +33,12 @@ from core.rom.convert_addresses import (
 )
 from core.text import read_translation_files as script_files
 from core.text.read_compiled_text import decode_literal_glyphs
-from emulator.validate_controller_input import BTN, collect_button_ids, validate_frame_count
-
+from core.validation.validate_integers import is_integer
+from emulator.validate_controller_input import (
+    BTN,
+    collect_button_ids,
+    validate_frame_count,
+)
 from verification.game import apply_battle_fixtures as battle_fixtures
 from verification.game import navigate_maze as maze
 from verification.game.emulator_session import BOOTED, A, GameSession
@@ -110,10 +114,9 @@ def plan_menu_inputs(options: int, selected: object, cursor: int = 0) -> list[st
     """
     Plan directional presses for the native two-, three- or four-option menu.
 
-    Four-option menus use the row/column bit layout at $81:D1AE and assume the
-    cursor starts at zero. Two- and three-option menus
-    move from the current cursor, which a previously held direction may already
-    have shifted.
+    Four-option menus use the row/column bit layout at $81:D1AE and assume the cursor starts at
+    zero. Two- and three-option menus move from the current cursor, which a previously held
+    direction may already have shifted.
 
     Args:
         options (int): Native menu option count: two, three or four. Integer
@@ -122,7 +125,8 @@ def plan_menu_inputs(options: int, selected: object, cursor: int = 0) -> list[st
             subclasses are accepted; booleans and nonintegers are rejected.
         cursor (int, optional): Current zero-based cursor for two- and three-option
             menus; out-of-range integer values use zero. Integer subclasses are
-            accepted; booleans and nonintegers are rejected. Ignored for four-option menus.
+            accepted; booleans and nonintegers are rejected. Four-option menus do not use its value,
+            but its type is still checked.
             Defaults to 0.
 
     Returns:
@@ -131,14 +135,16 @@ def plan_menu_inputs(options: int, selected: object, cursor: int = 0) -> list[st
 
     Raises:
         ValueError: If options is not an integer count of two, three or four,
-            selected is not an integer within the menu, or a two-/three-option
-            cursor is not an integer. Booleans are rejected for these values.
+            selected is not an integer within the menu, or cursor is not an integer. Booleans are rejected for these values.
     """
     # bool inherits from int but does not represent a menu count or selection.
-    if isinstance(options, bool) or not isinstance(cast(object, options), int) or options not in (2, 3, 4):
+    if not is_integer(options) or options not in (2, 3, 4):
         raise ValueError("Unsupported original menu layout")
-    if isinstance(selected, bool) or not isinstance(selected, int) or not 0 <= selected < options:
+    if not is_integer(selected) or not 0 <= selected < options:
         raise ValueError("Choice outside the original menu")
+
+    if not is_integer(cursor):
+        raise ValueError("Menu cursor must be an integer, not a boolean")
 
     # Four-choice menus arrange indices as row/column bits rather than a
     # vertical list: Down toggles bit 0 and Right toggles bit 1.
@@ -146,8 +152,6 @@ def plan_menu_inputs(options: int, selected: object, cursor: int = 0) -> list[st
         return (["down"] if selected & 1 else []) + (["right"] if selected & 2 else [])
 
     if options in (2, 3):
-        if isinstance(cursor, bool) or not isinstance(cast(object, cursor), int):
-            raise ValueError("Menu cursor must be an integer, not a boolean")
         cursor = cursor if 0 <= cursor < options else 0
         return (
             ["down"] * (selected - cursor) if selected >= cursor else ["up"] * (cursor - selected)
@@ -174,9 +178,10 @@ def find_following_menu(rom: bytes | bytearray, terminator: int) -> NativeMenu |
             permission; None if no matching command follows.
 
     Raises:
-        ValueError: If the terminator offset lies outside the supplied ROM.
+        ValueError: If terminator is a boolean or noninteger, or lies outside
+            the supplied ROM. Integer subclasses are accepted.
     """
-    if not 0 <= terminator < len(rom):
+    if not is_integer(terminator) or not 0 <= terminator < len(rom):
         raise ValueError("Text terminator lies outside the ROM")
     pointer = terminator + 1
     seen: set[int] = set()
@@ -277,6 +282,8 @@ class GameplayController(GameSession):
         initializes controller state. If this additional initialization fails, the emulator is
         closed before the error propagates.
 
+        Boolean options require bool values; numeric zero and one are rejected.
+
         Args:
             rom (bytes | bytearray): Uninstrumented source ROM retained by reference.
             scratch (Path): Output path for the ROM file with tracing code added.
@@ -288,7 +295,7 @@ class GameplayController(GameSession):
 
         Raises:
             TypeError: If rom is not bytes or bytearray, or english or accumulate is not a
-                boolean; GameSession validates these inputs before loading the emulator.
+                boolean.
             OSError: If instrumentation files, the scratch ROM, native core or translation
                 sources cannot be accessed.
             ValueError: If instrumentation, source metadata, text chains or required native
@@ -297,6 +304,8 @@ class GameplayController(GameSession):
             IndexError: If text indexing follows an entry, operand or token outside the ROM.
             KeyError: If indexed text contains an unsupported F8 command.
         """
+        if type(english) is not bool or type(accumulate) is not bool:
+            raise TypeError("Boolean options require bool values: english, accumulate")
         super().__init__(rom, scratch, english=english, shots=shots, accumulate=accumulate)
         try:
             self.entries = {e["id"]: e for n in script_files.NAMES for e in script_files.load(n)}
@@ -342,16 +351,18 @@ class GameplayController(GameSession):
         Apply a bounded byte write at a region-relative offset.
 
         Args:
-            address (int): Byte offset relative to the selected native memory region. Only
-                built-in int offsets are accepted; booleans and int subclasses are rejected.
+            address (int): Byte offset relative to the selected native memory region. Integer
+                subclasses are accepted; booleans are rejected.
             data (bytes | Iterable[int]): Replacement byte values; writes are bounded by the
                 selected memory region.
             region (int, optional): Libretro memory region ID: 0 is SRAM, 1 is RTC, 2 is WRAM
-                and 3 is VRAM. Defaults to 2.
+                and 3 is VRAM. Integer subclasses are accepted; booleans are rejected. Defaults
+                to 2.
 
         Raises:
-            ValueError: If address is not a built-in int, the selected region is unavailable,
-                the span exceeds it, or a payload value is outside the byte range.
+            ValueError: If address or region is a boolean or noninteger, the region ID is
+                unsupported, the span exceeds that region, or a payload value is a boolean,
+                noninteger or outside the byte range.
             TypeError: If data is not bytes or an iterable of integer byte values.
         """
         self.emu.poke(address, data, id_=region)
@@ -396,12 +407,10 @@ class GameplayController(GameSession):
         """
         w = self.W
         if (
-            isinstance(slot, bool)
-            or not isinstance(cast(object, slot), int)
-            or isinstance(base, bool)
-            or not isinstance(cast(object, base), int)
-            or not 0 <= slot < 37
-            or not 0 <= base <= len(w) - 111
+            not is_integer(slot)
+            or not is_integer(base)
+            or (not 0 <= slot < 37)
+            or (not 0 <= base <= len(w) - 111)
         ):
             raise ValueError("Actor pointer requires a valid slot and three complete tables")
 
@@ -501,7 +510,7 @@ class GameplayController(GameSession):
         # Validate the complete fixture batch before applying any save changes.
         for f in flags:
             address, mask, value = f["address"], f["mask"], f["value"]
-            if any(type(v) is not int for v in (address, mask, value)) or not (
+            if any((not is_integer(v)) for v in (address, mask, value)) or not (
                 0 <= address < len(self.S) and 0 <= mask <= 255 and 0 <= value <= 255
             ):
                 raise ValueError("Save flag address, mask or value is out of range")
@@ -533,7 +542,9 @@ class GameplayController(GameSession):
         Raises:
             ValueError: If the room is not exactly two byte values.
         """
-        if len(room) != 2 or any(type(value) is not int or not 0 <= value <= 255 for value in room):
+        if len(room) != 2 or any(
+            (not is_integer(value)) or not 0 <= value <= 255 for value in room
+        ):
             raise ValueError("Room must contain exactly two bytes: stage and variant")
         self.poke(0x1AA8, room)
         self.poke(0x1719, [self.W[0x1719] | 0x80])
@@ -665,9 +676,11 @@ class GameplayController(GameSession):
             if self.task is None:
                 raise AssertionError("Operation requires an active replay task")
             room = [self.task["stage"], self.task["variant"]]
-        if len(room) != 2 or any(type(value) is not int or not 0 <= value <= 255 for value in room):
+        if len(room) != 2 or any(
+            (not is_integer(value)) or not 0 <= value <= 255 for value in room
+        ):
             raise ValueError("Room must contain exactly two bytes: stage and variant")
-        if type(x) is not int or type(y) is not int:
+        if (not is_integer(x)) or (not is_integer(y)):
             raise ValueError("Field coordinates must be integer pixel positions")
         x, y = max(0, x), max(0, y)
         # The partner is eight pixels to the right; Y shares its upper nibble
@@ -705,7 +718,7 @@ class GameplayController(GameSession):
         Raises:
             ValueError: If the actor slot is not an integer from 0 through 36.
         """
-        if type(actor) is not int or not 0 <= actor < 37:
+        if (not is_integer(actor)) or not 0 <= actor < 37:
             raise ValueError("Actor slot must be between 0 and 36")
         self.poke(0x181A, [self.W[0x181A] | 2])
         self.poke(0x171A, [self.W[0x171A] | 8])
@@ -871,17 +884,24 @@ class GameplayController(GameSession):
 
     def get_opponent_health_fixture(self) -> int | None:
         """
-        Return the configured opponent-health override, preferring the native setting.
+        Return the selected native or story opponent-health setting.
 
-        A nonzero native_enemy_health_fixture takes precedence over story_enemy_hp.
-        If neither is enabled, the story setting is returned as supplied, which
-        may be None or zero.
+        A nonzero native setting takes precedence; otherwise use the story setting. None and
+        zero leave the fixture inactive. Integer subclasses are accepted; booleans are rejected.
 
         Returns:
             int | None: Native enemy-health override, falling back to the task's
                 story-battle HP override; None or zero when neither is enabled.
+
+        Raises:
+            ValueError: If either configured value is a boolean, noninteger or
+                outside the unsigned 16-bit range.
         """
         task = self.task or {}
+        for name in ("native_enemy_health_fixture", "story_enemy_hp"):
+            value = task.get(name)
+            if value is not None and (not is_integer(value) or not 0 <= value <= 0xFFFF):
+                raise ValueError(f"{name} must be an integer 0-65535, not a boolean")
         return task.get("native_enemy_health_fixture") or task.get("story_enemy_hp")
 
     def start_script(self, script: bytes | Iterable[int]) -> None:
@@ -897,7 +917,8 @@ class GameplayController(GameSession):
 
         Raises:
             TypeError: If script is not bytes or an iterable of integer byte values.
-            ValueError: If a script value is outside the byte range or the script exceeds WRAM.
+            ValueError: If a script value is not an integer byte, is a boolean, or the script
+                exceeds WRAM.
         """
         self.poke(0x7000, script)
 
@@ -972,13 +993,12 @@ class GameplayController(GameSession):
             address (int): SNES bus address of the scene script, from 0 through 0xFFFFFF.
 
         Raises:
-            ValueError: If the actor slot is not a built-in integer from 0 through 36, or the
-                script address is not a built-in integer from 0 through 0xFFFFFF. Booleans and
-                integer subclasses are rejected.
+            ValueError: If the actor slot is not an integer from 0 through 36, or the script
+                address is not an integer from 0 through 0xFFFFFF. Booleans are rejected.
         """
         if (
-            type(slot) is not int
-            or type(address) is not int
+            (not is_integer(slot))
+            or (not is_integer(address))
             or not 0 <= slot < 37
             or not 0 <= address <= 0xFFFFFF
         ):
@@ -1021,14 +1041,13 @@ class GameplayController(GameSession):
             int: Native actor slot allocated to the spawned script.
 
         Raises:
-            ValueError: If the parent slot is not a built-in integer from 0 through 36, or the
-                script address is not a built-in integer from 0 through 0xFFFFFF. Booleans and
-                integer subclasses are rejected.
+            ValueError: If the parent slot is not an integer from 0 through 36, or the script
+                address is not an integer from 0 through 0xFFFFFF. Booleans are rejected.
             StopIteration: If no native actor slot is free for the spawned script.
         """
         if (
-            type(parent) is not int
-            or type(address) is not int
+            (not is_integer(parent))
+            or (not is_integer(address))
             or not 0 <= parent < 37
             or not 0 <= address <= 0xFFFFFF
         ):
@@ -1136,8 +1155,14 @@ class GameplayController(GameSession):
         Returns:
             int: Sum of frame counts in the active task's controller_steps, or zero
                 when no sequence is configured.
+
+        Raises:
+            ValueError: If a step duration is a boolean, noninteger or negative.
         """
-        return sum(s["frames"] for s in (self.task or {}).get("controller_steps", []))
+        steps = (self.task or {}).get("controller_steps", [])
+        for step in steps:
+            validate_frame_count(step["frames"])
+        return sum(step["frames"] for step in steps)
 
     def is_controller_blocked(self) -> bool:
         """
@@ -1178,6 +1203,7 @@ class GameplayController(GameSession):
                 calls increment control_frame even after every configured step is past.
 
         Raises:
+            ValueError: If a controller-step duration is a boolean, noninteger or negative.
             AssertionError: If no task is active after the input gates clear.
             KeyError: If a step names a button not present in BTN.
         """
@@ -1186,6 +1212,7 @@ class GameplayController(GameSession):
 
         # Advance the task's input timeline only after native input gates clear;
         # blocked frames must not consume the scheduled movement.
+        self.count_controller_frames()
         age = self.control_frame
         self.control_frame += 1
 
@@ -1211,13 +1238,15 @@ class GameplayController(GameSession):
                 supply input when eligible. Defaults to ().
 
         Raises:
-            ValueError: If the frame count is not a nonnegative integer or a button ID is
-                unsupported.
-            PlaybackStopped: If the configured stable battle state is reached.
+            ValueError: If a frame count or controller-step duration is not a nonnegative
+                integer excluding booleans, a button ID is unsupported, or an opponent-health
+                setting is a boolean, noninteger or outside the unsigned 16-bit range.
             TypeError: If held is not iterable.
+            PlaybackStopped: If the configured stable battle state is reached.
         """
         validate_frame_count(n)
         held_buttons = collect_button_ids(held)
+        self.get_opponent_health_fixture()
         for _ in range(n):
             buttons = held_buttons.copy()
             if (
@@ -1475,6 +1504,10 @@ class GameplayController(GameSession):
             KeyError: If verified text contains an unsupported F8 command.
             OSError: If page screenshots cannot be saved or item-name sources cannot be read.
         """
+        if plan is not None and any(
+            value != "cancel" and (not is_integer(value) or not 0 <= value <= 3) for value in plan
+        ):
+            raise ValueError("Menu plans must contain integer indices 0-3 or cancel")
         validate_frame_count(max_frames)
         validate_frame_count(quiet_target)
         task = self.task or {}

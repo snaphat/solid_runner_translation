@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Literal, Sequence
 
 from core.files.validate_binary_buffers import require_byte_buffer
+from core.validation.validate_integers import is_integer
 
 
 def get_pixels(data: bytes | bytearray, t: int, bpp: Literal[2, 4] = 4) -> list[list[int]]:
@@ -33,10 +34,10 @@ def get_pixels(data: bytes | bytearray, t: int, bpp: Literal[2, 4] = 4) -> list[
             tile. Booleans are rejected.
     """
     require_byte_buffer(data, (bytes, bytearray))
-    if type(bpp) is not int or bpp not in (2, 4):
+    if (not is_integer(bpp)) or bpp not in (2, 4):
         raise ValueError("Tile depth must be 2 or 4 bits per pixel")
     tile_bytes = 8 * bpp
-    if type(t) is not int or t < 0 or (t + 1) * tile_bytes > len(data):
+    if (not is_integer(t)) or t < 0 or (t + 1) * tile_bytes > len(data):
         raise ValueError("Tile index must identify a complete tile in the buffer")
     tile = data[t * tile_bytes : (t + 1) * tile_bytes]
 
@@ -73,11 +74,11 @@ def put_pixels(data: bytearray, t: int, px: Sequence[Sequence[int]]) -> None:
     # Validate the whole matrix before the first write; a malformed late row
     # must not leave the destination tile partly replaced.
     require_byte_buffer(data, (bytearray,))
-    if type(t) is not int or t < 0 or (t + 1) * 32 > len(data):
+    if (not is_integer(t)) or t < 0 or (t + 1) * 32 > len(data):
         raise ValueError("Tile index must identify a complete 4bpp tile")
     if len(px) != 8 or any(len(row) != 8 for row in px):
         raise ValueError("A tile must contain exactly eight rows of eight pixels")
-    if any(type(pixel) is not int or not 0 <= pixel <= 15 for row in px for pixel in row):
+    if any((not is_integer(pixel)) or not 0 <= pixel <= 15 for row in px for pixel in row):
         raise ValueError("4bpp palette indices must be integers in 0-15")
     # Split each palette index into four bitplanes, most-significant pixel first.
     # The first two planes occupy the first 16 bytes; planes 2-3 occupy the next 16.

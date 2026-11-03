@@ -18,6 +18,7 @@ from typing import Iterable, Iterator, Literal, cast
 from core.graphics.font_tables import MAIN_FONT, VWF_FONT
 from core.text.encode_text import encode_text
 from core.text.read_text_tokens import decode_glyph_index, parse_encoded_text
+from core.validation.validate_integers import is_integer
 
 GAP, SPACEW = 1, 4  # Pixels: inter-glyph gap and space advance; match asm/vwf.asm.
 
@@ -80,7 +81,7 @@ def measure_glyph_advance(rom: bytes | bytearray, idx: int) -> int:
         TypeError: If idx is not an integer or is a boolean.
         ValueError: If the glyph index is negative or its font record lies outside the ROM.
     """
-    if type(idx) is not int:
+    if not is_integer(idx):
         raise TypeError("Glyph index must be an integer; booleans are not indices")
     base = VWF_FONT if idx < 256 else MAIN_FONT
     if idx < 0 or base + (idx + 1) * 22 > len(rom):
@@ -117,7 +118,7 @@ def _validate_name_width(name_width: int | None) -> None:
             rejected.
     """
     # bool is an int subclass; True must not become a one-pixel reservation.
-    if name_width is not None and (type(name_width) is not int or name_width < 0):
+    if name_width is not None and ((not is_integer(name_width)) or name_width < 0):
         raise ValueError("System-name width must be a nonnegative integer")
 
 
@@ -201,7 +202,8 @@ def measure_text_width(
             text.
         b (bytes | bytearray): Encoded game text, including any control-code operands.
         insert_sizes (dict[bytes, int] | None, optional): Mutable token-to-width
-            cache for repeated measurements in one layout. Player-name and
+            cache for repeated measurements in one layout. Cached widths must be
+            nonnegative integers; booleans are rejected and subclasses are accepted. Player-name and
             numeric reservations are reused. Item/opponent reservations are
             refreshed from name_width on each call. None creates a fresh cache.
         name_width (int | None, optional): Pixel advance added for each F8/12 or
@@ -214,14 +216,17 @@ def measure_text_width(
         int: Horizontal text advance in pixels.
 
     Raises:
-        ValueError: If name_width is invalid or an item/opponent insertion has no supplied name
-            width, or an encoded token/font record is invalid.
+        ValueError: If a supplied or cached insertion width is a boolean, noninteger
+            or negative, an item/opponent insertion has no supplied name width,
+            or an encoded token or font record is invalid.
         TypeError: If b is not bytes or bytearray.
     """
     _validate_name_width(name_width)
     # A layout may measure many candidate lines. Cache their insertions only
     # within that layout, so another ROM, font or script edit is measured afresh.
     insert_sizes = {} if insert_sizes is None else insert_sizes
+    if any(not is_integer(value) or value < 0 for value in insert_sizes.values()):
+        raise ValueError("Cached insertion widths must be nonnegative integers, not booleans")
     width = 0
 
     for token, glyph in iter_text_tokens(b):
@@ -236,7 +241,7 @@ def measure_text_width(
             width += insert_sizes[token]
         # Commands and terminators contribute no glyph advance; literal glyphs
         # use the same proportional or fixed-font measurement as compilation.
-        elif isinstance(glyph, int) and glyph >= 0:
+        elif is_integer(glyph) and glyph >= 0:
             width += measure_glyph_advance(rom, glyph)
 
     return width
@@ -283,7 +288,7 @@ def measure_name_width(rom: bytes | bytearray, names: Iterable[str]) -> int:
         for _, glyph in iter_text_tokens(encode_text(name)):
             # Controls could insert more text or move the cursor. Reject them
             # so each candidate contributes the width of one literal name.
-            if not isinstance(glyph, int) or glyph < 0:
+            if not is_integer(glyph) or glyph < 0:
                 raise ValueError("System names must contain only literal glyphs")
             width += measure_glyph_advance(rom, glyph)
         # The game can choose any candidate; reserve the largest whole-name

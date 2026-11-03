@@ -14,6 +14,7 @@ from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics.font_tables import MAIN_FONT, VWF_FONT
 from core.graphics.load_font_artwork import MAIN_PUNCT, G
 from core.text.encode_text import M
+from core.validation.validate_integers import is_integer
 
 
 def find_glyph_slots() -> dict[str, int]:
@@ -84,9 +85,8 @@ def write_glyphs(rom: bytearray, base: int, glyphs: Mapping[str, Sequence[str]])
 
     Args:
         rom (bytearray): Candidate ROM whose font table is updated in place.
-        base (int): Nonnegative file offset of the destination font table.
-            Only built-in int values are accepted; booleans and int subclasses
-            are rejected.
+        base (int): Nonnegative integer file offset of the destination font table.
+            Integer subclasses are accepted; booleans and nonintegers are rejected.
         glyphs (Mapping[str, Sequence[str]]): Character/ligature keys mapped to
             eleven single-line bitmap row strings, at most 16 columns wide; # is ink.
             Rows must not contain newline or carriage-return characters, and the
@@ -100,7 +100,7 @@ def write_glyphs(rom: bytearray, base: int, glyphs: Mapping[str, Sequence[str]])
     """
     require_byte_buffer(rom, (bytearray,))
     # Validate the offset before arithmetic: bool would otherwise act as 0 or 1.
-    if type(base) is not int or base < 0:
+    if (not is_integer(base)) or base < 0:
         raise ValueError("Font table base must be a nonnegative integer; booleans are invalid")
 
     slots = find_glyph_slots()

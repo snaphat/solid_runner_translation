@@ -13,6 +13,8 @@ helpers; it does not wrap text or modify ROM bytes.
 
 from __future__ import annotations
 
+from core.validation.validate_integers import is_integer
+
 # Maximum unheadered image size supported by the standard LoROM mapping.
 ROM_CAPACITY = 0x400000
 
@@ -89,7 +91,7 @@ def _validate_rom_offset(offset: int) -> None:
         TypeError: If offset is not an integer or is a boolean.
         ValueError: If offset is negative or at least ROM_CAPACITY.
     """
-    if type(offset) is not int:
+    if not is_integer(offset):
         raise TypeError("Text offset must be an integer; booleans are not offsets")
     if not 0 <= offset < ROM_CAPACITY:
         raise ValueError("Text offset must lie within the 4 MiB LoROM address range")

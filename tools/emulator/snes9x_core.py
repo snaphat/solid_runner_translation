@@ -32,7 +32,12 @@ from pathlib import Path
 from typing import Callable, Iterable, cast
 
 from core.graphics import write_png as png
-from emulator.validate_controller_input import BTN, validate_frame_count
+from core.validation.validate_integers import is_integer
+from emulator.validate_controller_input import (
+    BTN,
+    collect_button_ids,
+    validate_frame_count,
+)
 
 # Default core DLL resolved at import time; the constructor can override this path.
 CORE = os.environ.get(
@@ -210,7 +215,8 @@ class Emu:
         lib (ctypes.CDLL): Loaded libretro core; direct calls require the
             registered callback lifetimes.
         held (set[int]): Button IDs reported by the input callback on each
-            emulated frame.
+            emulated frame. run() validates the set before native execution;
+            booleans are rejected and integer subclasses are accepted.
         fmt (int): Current libretro pixel format: 0 is 0RGB1555, 1 XRGB8888,
             and 2 RGB565. Each captured frame stores its own format value.
         frame_memory (dict[int, bytes]): Independent SRAM (0), WRAM (2) and VRAM (3)
@@ -471,9 +477,13 @@ class Emu:
                 Defaults to 1.
 
         Raises:
-            ValueError: If the frame count is not a nonnegative integer.
+            ValueError: If n is not a nonnegative integer, or held contains a
+                boolean or unsupported button ID. Integer subclasses are accepted.
+            TypeError: If held is not iterable.
         """
         validate_frame_count(n)
+        # Direct users can replace held without going through a session.
+        collect_button_ids(self.held)
         for _ in range(n):
             self.lib.retro_run()
 
@@ -525,13 +535,19 @@ class Emu:
         Copy one libretro memory region into an independent byte snapshot.
 
         Args:
-            id_ (int): Libretro memory-region ID: 0 is SRAM, 2 is WRAM and 3 is
-                VRAM.
+            id_ (int): Libretro memory-region ID: 0 is SRAM, 1 is cartridge RTC,
+                2 is WRAM and 3 is VRAM. Integer subclasses are accepted;
+                booleans are rejected.
 
         Returns:
             bytes: Independent copy of the selected memory region, or empty bytes
                 when it has no native data pointer.
+
+        Raises:
+            ValueError: If id_ is a boolean, noninteger or unsupported region ID.
         """
+        if not is_integer(id_) or id_ not in (0, 1, 2, 3):
+            raise ValueError("Unsupported libretro memory region")
         p = self.lib.retro_get_memory_data(id_)
         n = self.lib.retro_get_memory_size(id_)
         return C.string_at(p, n) if p else b""
@@ -555,7 +571,7 @@ class Emu:
             ValueError: If the region is not SRAM/WRAM/VRAM, or is not an integer.
             RuntimeError: If no video callback has captured the requested snapshot yet.
         """
-        if type(id_) is not int or id_ not in (0, 2, 3):
+        if (not is_integer(id_)) or id_ not in (0, 2, 3):
             raise ValueError("Frame memory is available only for SRAM (0), WRAM (2) and VRAM (3)")
         if id_ not in self.frame_memory:
             raise RuntimeError(self._frame_capture_error or "No frame memory has been captured")
@@ -606,18 +622,30 @@ class Emu:
 
         Raises:
             ValueError: If the region is unavailable or the requested span is outside it, or a
-                payload element is outside the byte range.
+                payload element is a boolean, noninteger or outside the byte range.
+                Boolean and unsupported region IDs are rejected. Integer subclasses
+                are accepted for offsets, region IDs and payload elements.
             TypeError: If data is not bytes or an iterable of integer byte values.
         """
+        if not is_integer(id_) or id_ not in (0, 1, 2, 3):
+            raise ValueError("Unsupported libretro memory region")
         p = self.lib.retro_get_memory_data(id_)
         size = self.lib.retro_get_memory_size(id_)
         # bytes(integer) means a zero-filled buffer of that length. Require an
         # iterable so a scalar payload cannot silently erase native memory.
-        payload = data if isinstance(data, bytes) else bytes(iter(data))
+        if isinstance(data, bytes):
+            payload = data
+        else:
+            values = list(iter(data))
+            if any(not is_integer(value) or not 0 <= value <= 255 for value in values):
+                raise ValueError(
+                    "Memory payload must contain integer bytes, not booleans"
+                )
+            payload = bytes(values)
 
         # Validate the complete write against the native region before pointer
         # arithmetic; ctypes.memmove cannot enforce Python buffer bounds.
-        if not p or type(addr) is not int or not 0 <= addr <= size or len(payload) > size - addr:
+        if not p or (not is_integer(addr)) or not 0 <= addr <= size or len(payload) > size - addr:
             raise ValueError(
                 f"Write outside emulator memory region {id_}: offset {addr}, size {len(payload)}, capacity {size}"
             )

@@ -19,9 +19,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 
-from core.rom.convert_addresses import convert_pointer_bytes_to_file, resolve_bank_pointer
+from core.rom.convert_addresses import (
+    convert_pointer_bytes_to_file,
+    resolve_bank_pointer,
+)
 from core.text.read_text_tokens import decode_glyph_index, walk_text_tokens
 from core.text.read_translation_files import TextReferences
+from core.validation.validate_integers import is_integer
 
 # Original report-slot file offset: the repair uses its first byte for show-text,
 # so resolve_message_start() skips that opcode when locating the repaired text payload.
@@ -47,7 +51,7 @@ def resolve_message_start(offset: int) -> int:
         TypeError: If the offset is not an integer or is a boolean.
         ValueError: If the offset lies outside the four-megabyte LoROM address range.
     """
-    if type(offset) is not int:
+    if not is_integer(offset):
         raise TypeError("Message offset must be an integer; booleans are not offsets")
     if not 0 <= offset < 0x400000:
         raise ValueError("Message offset must lie within the four-megabyte ROM")
@@ -76,7 +80,7 @@ def resolve_text_start(rom: bytes | bytearray, offset: int) -> int:
     """
     # Validate before adding the repair adjustment: arithmetic would otherwise
     # turn a boolean into an ordinary integer and bypass the token reader's check.
-    if type(offset) is not int:
+    if not is_integer(offset):
         raise TypeError("Text offset must be an integer; booleans are not offsets")
     if not 0 <= offset < len(rom):
         raise IndexError(f"outside ROM at {offset:06X}")
@@ -115,9 +119,11 @@ class Reader:
         """
         Follow a compiled text chain to locate its terminator or explain a malformed chain.
 
-        The text reader follows relocation commands, while the event interpreter's
-        initial scan stops at its own command boundaries. The follow_jumps option
-        models these two paths so dialogue verification can check their agreement.
+        The text reader follows relocation commands, while the event interpreter's initial scan
+        stops at its own command boundaries. The follow_jumps option models these two paths so
+        dialogue verification can check their agreement.
+
+        Boolean options require bool values; numeric zero and one are rejected.
 
         Args:
             i (int): Text start as an unheadered ROM file offset.
@@ -133,6 +139,8 @@ class Reader:
             TypeError: If the ROM is not bytes or bytearray, i is not an integer or is a
                 boolean, or follow_jumps is not a boolean.
         """
+        if type(follow_jumps) is not bool:
+            raise TypeError("Boolean options require bool values: follow_jumps")
         # Apply the computer-slot adjustment before walking; the generic token reader
         # does not know that this repaired slot begins with a show-text event opcode.
         try:
@@ -168,7 +176,7 @@ class Reader:
         Raises:
             TypeError: If i is not an integer or is a boolean.
         """
-        if type(i) is not int:
+        if not is_integer(i):
             raise TypeError("Name offset must be an integer; booleans are not offsets")
         if not 0 <= i < len(self.rom):
             return "outside ROM at %06X" % i
@@ -226,15 +234,16 @@ class Reader:
         """
         Check that a compiled entry reaches its required terminator safely.
 
-        Names are checked against native raw-copy restrictions. Other modes use the
-        text reader's jump chain and require either the original slot terminator or
-        a standalone FF terminator, as selected by end.
+        Names are checked against native raw-copy restrictions. Other modes use the text
+        reader's jump chain and require either the original slot terminator or a standalone FF
+        terminator, as selected by end.
 
         Args:
             i (int): Text start as an unheadered ROM file offset.
             end (int): Expected original terminator file offset; a negative value
                 requires a standalone FF terminator. Ignored in name mode n,
-                whose native copy loop always requires FF.
+                whose native copy loop always requires FF. Its type must still
+                be an integer excluding booleans.
             mode (str): One of v, p, n, f, m, or c. n selects name-copy
                 restrictions; the other modes share ordinary chain traversal.
                 An unsupported mode produces a diagnostic, not an exception.
@@ -244,11 +253,14 @@ class Reader:
                 or reaches the terminator required by end.
 
         Raises:
-            TypeError: If i is not an integer or is a boolean, or ordinary text traversal
-                receives a ROM that is not bytes or bytearray.
+            TypeError: If a text start is a boolean or noninteger, or ordinary traversal
+                receives a ROM that is not bytes or bytearray. Every supported mode also
+                requires end to be an integer excluding booleans.
         """
         if mode not in ("v", "p", "n", "f", "m", "c"):
             return f"unsupported text mode: {mode!r}"
+        if not is_integer(end):
+            raise TypeError("Text terminator offset must be an integer, not a boolean")
         if mode == "n":
             return self.validate_name_chain(i)
 
@@ -274,9 +286,8 @@ class Reader:
         """
         Check agreement between dialogue scanning and text reading.
 
-        Inner segments end in FD/18. The final segment must reach the original
-        terminator, and interpreter scans must agree with text-reader jump chains
-        at every segment.
+        Inner segments end in FD/18. The final segment must reach the original terminator, and
+        interpreter scans must agree with text-reader jump chains at every segment.
 
         Args:
             a (int): First dialogue segment file offset, at the text payload
@@ -289,11 +300,13 @@ class Reader:
                 terminator and every page boundary agrees with the event scan.
 
         Raises:
-            TypeError: If the ROM is not bytes or bytearray, or a is not an integer or is a
-                boolean.
+            TypeError: If the ROM is not bytes or bytearray, or a or end is a boolean
+                or noninteger.
         """
         # The event interpreter and text renderer traverse relocation differently.
         # Each dialogue segment must bring both back to the same native terminator.
+        if not is_integer(end):
+            raise TypeError("Dialogue terminator offset must be an integer, not a boolean")
         pos = a
         while True:
             t, err = self.trace_text_chain(pos, follow_jumps=False)
@@ -444,7 +457,8 @@ def iter_dialogue_pages(
         rom (bytes | bytearray): ROM containing the complete dialogue chain.
         start (int): First page's file offset.
         boundaries (Mapping[int, str]): Registered starts mapped to entry IDs.
-            The initial page is always read.
+            The initial page is always read. Boolean keys are rejected; integer
+            subclasses are accepted.
         owner (str | None, optional): Permit continuations into starts belonging
             to this entry; None stops at every registered start.
 
@@ -452,12 +466,14 @@ def iter_dialogue_pages(
         tuple[int, int, int]: One-based page number, start offset and terminator offset.
 
     Raises:
-        TypeError: If rom is not bytes or bytearray, or a page start is not an integer or is a
-            boolean.
+        TypeError: If rom is not bytes or bytearray, or a page start or boundary
+            offset is a boolean or noninteger.
         ValueError: If a page contains a cyclic relocation chain.
         IndexError: If a page token or relocation target is outside the ROM.
         KeyError: If a page contains an unsupported F8 command.
     """
+    if any(not is_integer(offset) for offset in boundaries):
+        raise TypeError("Dialogue boundary offsets must be integers, not booleans")
     page = 1
     seen: set[int] = set()
     while start not in seen:

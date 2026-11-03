@@ -21,6 +21,7 @@ import collections
 import functools
 
 from core.files.validate_binary_buffers import require_byte_buffer
+from core.validation.validate_integers import is_integer
 
 
 def decompress(
@@ -53,7 +54,7 @@ def decompress(
         ValueError: If off or limit is not a nonnegative integer; booleans are rejected.
     """
     require_byte_buffer(rom, (bytes, bytearray))
-    if type(off) is not int or type(limit) is not int or off < 0 or limit < 0:
+    if (not is_integer(off)) or (not is_integer(limit)) or off < 0 or limit < 0:
         raise ValueError("Resource offset and decoded-byte limit must be nonnegative integers")
     out = bytearray()
     i = off

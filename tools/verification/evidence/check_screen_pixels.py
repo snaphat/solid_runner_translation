@@ -12,6 +12,7 @@ from __future__ import annotations
 import collections
 from typing import Any, Iterable, Sequence
 
+from core.validation.validate_integers import is_integer
 from verification.evidence.instrument_rom import GlyphRecord
 from verification.evidence.read_text_layers import TextLayer
 from verification.evidence.reconstruct_text_ink import reconstruct_glyph_ink
@@ -37,7 +38,8 @@ def reconstruct_screen_ink(
             tilemap placement or clipping.
 
     Raises:
-        ValueError: If a glyph selects a negative or incomplete ROM font record.
+        ValueError: If a glyph selects a negative or incomplete ROM font record, or a
+            cursor/font-offset field is a boolean or noninteger.
     """
     return reconstruct_screen_mask(rom, glyphs)[0]
 
@@ -63,7 +65,8 @@ def reconstruct_screen_mask(
             cleared spans clipped to the native buffer, and shadow-only pixels.
 
     Raises:
-        ValueError: If a glyph selects a negative or incomplete ROM font record.
+        ValueError: If a glyph selects a negative or incomplete ROM font record, or a
+            cursor/font-offset field is a boolean or noninteger.
     """
     ink: set[tuple[int, int]] = set()
     cleared: set[tuple[int, int]] = set()
@@ -85,10 +88,13 @@ def reconstruct_screen_mask(
 
 
 def collect_word_ink(
-    rom: bytes | bytearray, glyphs: Iterable[GlyphRecord], label_starts: Sequence[int] = ()
+    rom: bytes | bytearray,
+    glyphs: Iterable[GlyphRecord],
+    label_starts: Sequence[int] = (),
 ) -> list[set[tuple[int, int]]]:
     """
-    This function groups adjacent glyphs so each word or menu label can be checked at a single screen position.
+    This function groups adjacent glyphs so each word or menu label can be checked at a single
+    screen position.
 
     Spaces, line changes and explicit cursor moves separate words or menu labels. Later glyphs
     remove overwritten pixels from earlier groups, matching the final buffer rather than
@@ -97,19 +103,19 @@ def collect_word_ink(
     Args:
         rom (bytes | bytearray): Source font tables used to identify ink and spaces.
         glyphs (Iterable[GlyphRecord]): Ordered draws for the text record.
-        label_starts (Sequence[int], optional): Native buffer X positions where
-            declared menu labels begin. These separate adjacent labels even when
-            the compiler needs no space or cursor command between them.
-            Defaults to ().
+        label_starts (Sequence[int], optional): Native buffer X positions where declared menu
+            labels begin. These separate adjacent labels even when the compiler needs no space
+            or cursor command between them. Defaults to ().
 
     Returns:
         list[set[tuple[int, int]]]: Nonempty final word-ink sets in buffer coordinates.
 
     Raises:
         ValueError: If a menu-label start is not an integer from zero through 719, or a glyph
-            selects an incomplete or negative ROM font record.
+            selects an incomplete or negative ROM font record, or its cursor/font-offset fields
+            are booleans or nonintegers.
     """
-    if any(type(start) is not int or not 0 <= start < 720 for start in label_starts):
+    if any((not is_integer(start)) or not 0 <= start < 720 for start in label_starts):
         raise ValueError("Menu label starts must be integer buffer positions from zero through 719")
     words: list[set[tuple[int, int]]] = []
     active: int | None = None
@@ -138,15 +144,22 @@ def find_strip_character(line: int, strip: int, tilerow: int) -> int:
     Find the first tile character of a text-buffer strip.
 
     Args:
-        line (int): Logical text-buffer line. The eight base lines are 0-7;
-            horizontal strip carry in map_buffer_pixel() can select lines 8 or 9.
+        line (int): Zero-based buffer line, 0-9. The eight base lines (0-7)
+            can gain up to two lines from horizontal strip carry in
+            map_buffer_pixel(). Integer subclasses are accepted; booleans are rejected.
         strip (int): Left 120-pixel strip (0) or right strip (1).
         tilerow (int): Upper 8-pixel tile row (0) or lower row (1) within
             the text line.
 
     Returns:
         int: Character number at tile zero of the selected buffer strip.
+
+    Raises:
+        ValueError: If an index is a boolean, noninteger or outside its range.
     """
+    for value, maximum in ((line, 9), (strip, 1), (tilerow, 1)):
+        if not is_integer(value) or not 0 <= value <= maximum:
+            raise ValueError("Text-strip indices must be integers within the buffer")
     return line * 64 + strip * 32 + tilerow * 16
 
 
@@ -164,7 +177,7 @@ def map_buffer_pixel(x: int, y: int) -> tuple[int, int, int]:
     Raises:
         ValueError: If a coordinate is not an integer, is a boolean or is outside the buffer.
     """
-    if type(x) is not int or type(y) is not int or not (0 <= x < 720 and 0 <= y < 128):
+    if (not is_integer(x)) or (not is_integer(y)) or not (0 <= x < 720 and 0 <= y < 128):
         raise ValueError("Pixel must be within the native text buffer")
     line, ly = divmod(y, 16)
     strip, sx = divmod(x, 120)
@@ -210,9 +223,9 @@ def index_tile_characters(
             misaligned, or lacks a complete tilemap; or tile_size is not an integer equal to
             eight or sixteen.
     """
-    if type(base) is not int or base < 0 or base % 0x800 or base + 0x800 > len(vram):
+    if (not is_integer(base)) or base < 0 or base % 0x800 or base + 0x800 > len(vram):
         raise ValueError("Tilemap must be a complete 2KB-aligned VRAM region")
-    if type(tile_size) is not int or tile_size not in (8, 16):
+    if (not is_integer(tile_size)) or tile_size not in (8, 16):
         raise ValueError("Background tile size must be eight or sixteen pixels")
     cells: dict[int, list[tuple[int, int, bool, bool, int]]] = collections.defaultdict(list)
     scale = tile_size // 8
@@ -330,9 +343,27 @@ def check_screen_pixels(
             passed False.
 
     Raises:
-        ValueError: If the RGB frame or VRAM snapshot is incomplete, a text box or menu-label
-            position is invalid, or font/tilemap data is outside its buffer.
+        ValueError: If the RGB frame or VRAM snapshot is incomplete, a text box or
+            menu-label position is invalid, a text-layer numeric field or
+            glyph cursor field or font offset is a boolean or noninteger, or font
+            or tilemap data is outside its buffer.
     """
+    for layer in layers:
+        if any(
+            not is_integer(layer[field])
+            for field in (
+                "layer",
+                "base",
+                "size",
+                "font_base",
+                "tile_size",
+                "dx",
+                "dy",
+                "top",
+                "bottom",
+            )
+        ):
+            raise ValueError("Text-layer numeric fields must be integers, not booleans")
     _validate_rgb_frame(rows)
     if len(vram) != 0x10000:
         raise ValueError("Text verification requires a complete 65536-byte VRAM snapshot")
@@ -342,7 +373,7 @@ def check_screen_pixels(
     points = sorted(ink)
     if box is not None and (
         len(box) != 4
-        or any(type(v) is not int for v in box)
+        or any((not is_integer(v)) for v in box)
         or not (0 <= box[0] < box[2] <= 256 and 0 <= box[1] < box[3] <= len(rows))
     ):
         raise ValueError("Text box must be a nonempty rectangle within the captured frame")

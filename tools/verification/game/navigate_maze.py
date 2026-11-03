@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from core.validation.validate_integers import is_integer
+
 if TYPE_CHECKING:
     from verification.game.control_gameplay import GameplayController
 import collections
@@ -35,7 +37,8 @@ def choose_option(game: GameplayController) -> int | None:
             100. A disconnected remaining goal raises instead of returning None.
 
     Raises:
-        ValueError: If maze progress is negative or the current maze position or heading
+        ValueError: If maze progress is a boolean, noninteger or negative,
+            or the current maze position or heading
             is invalid.
         RuntimeError: If the next goal is disconnected in the original connectivity
             table.
@@ -45,7 +48,7 @@ def choose_option(game: GameplayController) -> int | None:
         raise AssertionError("Operation requires an active replay task")
 
     goals = game.entry_setup["maze_goals"]
-    if game.maze_goal < 0 or game.maze_steps < 0:
+    if any(not is_integer(value) or value < 0 for value in (game.maze_goal, game.maze_steps)):
         raise ValueError("Maze progress must be nonnegative")
 
     address, heading = game.W[0x1814], game.W[0xBD]
@@ -57,7 +60,12 @@ def choose_option(game: GameplayController) -> int | None:
     if game.maze_goal >= len(goals) or game.maze_steps >= 100:
         return None
 
-    if not (0xA0 <= address <= 0xF5 and address % 16 < 6) or heading not in (0, 64, 128, 192):
+    if not (0xA0 <= address <= 0xF5 and address % 16 < 6) or heading not in (
+        0,
+        64,
+        128,
+        192,
+    ):
         raise ValueError("Invalid native maze position or heading")
 
     game.maze_steps += 1
@@ -80,9 +88,18 @@ def choose_option(game: GameplayController) -> int | None:
 
         seen.add(at)
 
-        for direction, bit, delta in ((0, 1, -16), (64, 8, 1), (128, 2, 16), (192, 4, -1)):
+        for direction, bit, delta in (
+            (0, 1, -16),
+            (64, 8, 1),
+            (128, 2, 16),
+            (192, 4, -1),
+        ):
             to = at + delta
-            if 0xA0 <= to <= 0xF5 and to % 16 < 6 and table[((at >> 4) - 10) * 8 + (at & 15)] & bit:
+            if (
+                0xA0 <= to <= 0xF5
+                and to % 16 < 6
+                and table[((at >> 4) - 10) * 8 + (at & 15)] & bit
+            ):
                 queue.append((to, path + [direction]))
 
     if not route:
@@ -90,4 +107,10 @@ def choose_option(game: GameplayController) -> int | None:
 
     # The menu choices are relative to the current heading: forward, right/back,
     # or left. Heading values advance by 64 per quarter turn.
-    return 0 if route[0] == heading else 1 if (route[0] - heading) % 256 in (64, 128) else 2
+    return (
+        0
+        if route[0] == heading
+        else 1
+        if (route[0] - heading) % 256 in (64, 128)
+        else 2
+    )

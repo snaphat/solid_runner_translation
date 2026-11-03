@@ -15,6 +15,7 @@ from typing import Iterator
 from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics import compress_graphics
 from core.rom.convert_addresses import resolve_bank_pointer
+from core.validation.validate_integers import is_integer
 
 
 def read_bank_resource_table(bank: int, *, rom: bytes | bytearray) -> list[int] | None:
@@ -41,7 +42,7 @@ def read_bank_resource_table(bank: int, *, rom: bytes | bytearray) -> list[int] 
             Booleans are rejected.
     """
     require_byte_buffer(rom, (bytes, bytearray))
-    if type(bank) is not int or not 0 <= bank < 128 or (bank + 1) * 0x8000 > len(rom):
+    if (not is_integer(bank)) or not 0 <= bank < 128 or (bank + 1) * 0x8000 > len(rom):
         raise ValueError("Resource bank must identify a complete 32 KiB LoROM bank")
     b0 = bank * 0x8000
     ptrs: list[int] = []
@@ -130,7 +131,7 @@ def read_resource_block(rom: bytes | bytearray, bank: int, index: int) -> bytes:
     table = read_bank_resource_table(bank, rom=rom)
     if table is None:
         raise AssertionError("Native resource table is invalid")
-    if type(index) is not int or not 0 <= index < len(table):
+    if (not is_integer(index)) or not 0 <= index < len(table):
         raise IndexError("Resource index is outside the native table")
     raw, _ = compress_graphics.decompress(table[index], rom=rom)
     if raw is None:

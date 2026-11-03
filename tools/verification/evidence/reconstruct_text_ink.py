@@ -9,6 +9,7 @@ policies to the reconstructed pixels. The trace does not record the renderer's o
 
 from core.graphics.font_tables import MAIN_FONT as MAIN_FONT
 from core.graphics.font_tables import VWF_FONT as VWF_FONT
+from core.validation.validate_integers import is_integer
 from verification.evidence.instrument_rom import GlyphRecord
 
 
@@ -32,8 +33,14 @@ def reconstruct_glyph_ink(
             remain unclipped so each verifier can enforce its own drawing bounds.
 
     Raises:
-        ValueError: If the trace selects a negative or incomplete ROM font record.
+        ValueError: If a cursor field or font offset is a boolean or noninteger, or the
+            trace selects a negative or incomplete ROM font record. Integer
+            subclasses are accepted.
     """
+    # Trace arithmetic must not coerce boolean cursor or font fields to 0/1.
+    for field in ("font_offset", "before", "col", "row", "after", "after_col", "after_row"):
+        if not is_integer(g[field]):
+            raise ValueError(f"Glyph trace {field} must be an integer, not a boolean")
     vwf = bool(g["after_col"] & 0x80)
     font = VWF_FONT if vwf and g["font_offset"] // 22 < 256 else MAIN_FONT
     if g["font_offset"] < 0 or font + g["font_offset"] + 22 > len(rom):

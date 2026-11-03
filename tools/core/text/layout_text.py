@@ -17,6 +17,7 @@ import re
 
 from core.text import measure_text
 from core.text.encode_text import encode_text
+from core.validation.validate_integers import is_integer
 
 MAX_W = 236  # usable pixels per line (30 tiles = 240, keep a margin)
 LINES = 3  # Maximum rows per automatically generated dialogue page.
@@ -36,8 +37,8 @@ def wrap_text(
 
     The layout uses 00 for newlines and FD/18 between pages. Automatic pagination distributes
     lines evenly across pages of at most three rows: four lines become two pages of two.
-    Explicit form feeds outside brace commands create page breaks even when automatic pagination
-    is disabled.
+    Explicit form feeds outside brace commands create page breaks even
+    when automatic pagination is disabled.
 
     Args:
         rom (bytes | bytearray): Font tables used to fit words within max_w.
@@ -63,12 +64,15 @@ def wrap_text(
     Raises:
         ValueError: If max_w is not a positive integer, or a required system-name width is
             absent or invalid, a raw brace token is malformed, or a measured command or font
-            record is invalid. Booleans are not valid widths.
+            record is invalid. Booleans are not valid widths. Also raised if a supplied
+            name_width is a boolean, noninteger or negative.
         KeyError: If a source character has no game encoding.
         TypeError: If paginate is not a boolean.
         AssertionError: If a wrapped line still exceeds its pixel-width allowance.
     """
-    if type(max_w) is not int or max_w <= 0:
+    if name_width is not None and (not is_integer(name_width) or name_width < 0):
+        raise ValueError("name_width must be a nonnegative integer, not a boolean")
+    if (not is_integer(max_w)) or max_w <= 0:
         raise ValueError("Text width must be a positive integer")
     if type(paginate) is not bool:
         raise TypeError("paginate must be a boolean")
@@ -197,11 +201,14 @@ def encode_menu_layout(
     Raises:
         ValueError: If cells_total is neither None nor a positive integer (booleans are
             rejected), menu column markup is malformed, or a required system-name width is
-            absent or invalid, or a raw token/font record fails encoding or measurement.
+            absent or invalid, or a raw token/font record fails encoding or measurement. Also
+            raised if a supplied name_width is a boolean, noninteger or negative.
         KeyError: If a label character has no game encoding.
         AssertionError: If a label overlaps its predecessor or exceeds its assigned pixel width.
     """
-    if cells_total is not None and (type(cells_total) is not int or cells_total <= 0):
+    if name_width is not None and (not is_integer(name_width) or name_width < 0):
+        raise ValueError("name_width must be a nonnegative integer, not a boolean")
+    if cells_total is not None and ((not is_integer(cells_total)) or cells_total <= 0):
         raise ValueError("Menu row width must be a positive integer")
     if "\n" in text:  # several menu rows: lay out each, joined by 00 newlines
         return b"\x00".join(

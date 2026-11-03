@@ -23,6 +23,7 @@ from core.text.read_compiled_text import (
     iter_dialogue_pages,
     resolve_text_start,
 )
+from core.validation.validate_integers import is_integer
 
 
 def _index_entry_starts(rom: bytes | bytearray) -> dict[int, str]:
@@ -225,8 +226,13 @@ def walk_pages(
             without copying or modification.
 
     Raises:
-        TypeError: If rom is not bytes or bytearray, or at is not an integer or is a boolean.
+        TypeError: If rom is not bytes or bytearray, or a supplied text-index
+            offset or page number is a boolean or noninteger.
     """
+    if any(not is_integer(offset) for offset in out):
+        raise TypeError("Existing text-index offsets must be integers, not booleans")
+    if any(not is_integer(page) or not is_integer(offset) for _, page, offset in out.values()):
+        raise TypeError("Existing text-index pages and offsets must be integers, not booleans")
     try:
         for page, start, end in iter_dialogue_pages(
             rom, at, {} if owners is None else owners, entry

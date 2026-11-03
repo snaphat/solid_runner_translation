@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 from typing import TypedDict
 
+from core.validation.validate_integers import is_integer
 from verification.evidence.instrument_rom import DISPLAY
 
 # B-bus register offsets written by HDMA modes zero through seven, in transfer
@@ -96,20 +97,20 @@ def capture_text_layers(
             its $4300-$437F slots contain decoded DMA configuration from the same
             snapshot's separate DMA block, rather than unpopulated FillRAM bytes.
         height (int, optional): Visible scanlines to decode, zero through 256.
-            Only built-in int values are accepted; booleans and int subclasses are rejected.
+            Integer subclasses are accepted; booleans are rejected.
             Defaults to 224.
 
     Returns:
         list[TextLayer]: Supported enabled text backgrounds and their scanline bands.
 
     Raises:
-        ValueError: If height is not a built-in int from zero through 256,
+        ValueError: If height is a boolean or noninteger, or is outside zero through 256,
             frame memory is incomplete, an HDMA source is unavailable, display
             capture metadata is invalid, a text-register HDMA transfer uses
             the unsupported reverse direction, or a captured channel stream
             exceeds its 1 KiB slot.
     """
-    if type(height) is not int or not 0 <= height <= 256:
+    if (not is_integer(height)) or not 0 <= height <= 256:
         raise ValueError("Visible height must be an integer from zero through 256")
     if len(sram) < DISPLAY + 0x2400 or len(wram) != 0x20000 or len(registers) != 0x8000:
         raise ValueError("Frame memory is incomplete for display capture")
@@ -200,8 +201,7 @@ def read_text_layers(
             applied PPU shadows, IRQ records and copied HDMA streams, as prepared
             by capture_text_layers(). Raw cartridge SRAM alone is insufficient.
         height (int, optional): Visible frame height in scanlines, from zero through 256.
-            Only built-in int values are accepted; booleans and int subclasses
-            are rejected.
+            Integer subclasses are accepted; booleans are rejected.
             Defaults to 224.
 
     Returns:
@@ -214,7 +214,7 @@ def read_text_layers(
         ValueError: If height is invalid, snapshots are missing, IRQ evidence is ambiguous, or
             display HDMA evidence is unsupported or truncated.
     """
-    if type(height) is not int or not 0 <= height <= 256:
+    if (not is_integer(height)) or not 0 <= height <= 256:
         raise ValueError("Visible height must be an integer from zero through 256")
     if len(sram) < DISPLAY + 0x280 or sram[DISPLAY + 0x61] != 0xD7:
         raise ValueError("Frame has no display-register snapshot")

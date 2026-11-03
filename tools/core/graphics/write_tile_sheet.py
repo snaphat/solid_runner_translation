@@ -14,10 +14,14 @@ from typing import Literal
 from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics import convert_tiles
 from core.graphics import write_png as png
+from core.validation.validate_integers import is_integer
 
 
 def write_tile_sheet(
-    data: bytes | bytearray, bpp: Literal[2, 4], path: str | os.PathLike[str], cols: int = 16
+    data: bytes | bytearray,
+    bpp: Literal[2, 4],
+    path: str | os.PathLike[str],
+    cols: int = 16,
 ) -> None:
     """
     Write 8x8 tiles as a grayscale PNG sheet, drawn at twice their size.
@@ -43,7 +47,7 @@ def write_tile_sheet(
         OSError: If the destination file cannot be written.
     """
     require_byte_buffer(data, (bytes, bytearray))
-    if type(bpp) is not int or type(cols) is not int or bpp not in (2, 4) or cols <= 0:
+    if (not is_integer(bpp)) or (not is_integer(cols)) or bpp not in (2, 4) or cols <= 0:
         raise ValueError("Tile sheets require 2/4bpp and a positive column count")
     if len(data) % (8 * bpp):
         raise ValueError("Tile sheet data must contain complete tiles")

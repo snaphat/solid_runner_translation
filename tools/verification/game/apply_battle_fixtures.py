@@ -10,7 +10,9 @@ text and transition routines in control.
 from __future__ import annotations
 
 import ctypes
-from typing import TYPE_CHECKING, Iterable, Protocol, Sequence, cast
+from typing import TYPE_CHECKING, Iterable, Protocol, Sequence
+
+from core.validation.validate_integers import is_integer
 
 if TYPE_CHECKING:
     from verification.game.control_gameplay import GameplayController
@@ -103,7 +105,7 @@ def lower_enemy_health(game: GameplayController) -> None:
         if value is None:
             raise AssertionError("No opponent health fixture was configured")
 
-        if isinstance(value, bool) or not isinstance(cast(object, value), int) or not 1 <= value <= maximum:
+        if not is_integer(value) or not 1 <= value <= maximum:
             raise ValueError("Enemy health fixture outside the original maximum")
 
         game.poke(0x189C, value.to_bytes(2, "little"))
@@ -132,7 +134,7 @@ def finish_battle(game: GameplayController, after_turns: int = 0) -> None:
         ValueError: If after_turns is a boolean, is not an integer, or is negative.
     """
     # Validate before changing turn counters, flags or health.
-    if isinstance(after_turns, bool) or not isinstance(cast(object, after_turns), int) or after_turns < 0:
+    if not is_integer(after_turns) or after_turns < 0:
         raise ValueError("Turn budget must be a nonnegative integer, not a boolean")
     w = game.W
     at = (

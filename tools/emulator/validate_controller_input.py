@@ -9,6 +9,8 @@ rules without loading the native core.
 
 from typing import Iterable
 
+from core.validation.validate_integers import is_integer
+
 # Libretro joypad IDs consumed by the input-state callback, not SNES register masks.
 BTN = {
     "b": 0,
@@ -34,13 +36,13 @@ def validate_frame_count(frames: int) -> None:
     Require a nonnegative integer duration before changing input or core state.
 
     Args:
-        frames (int): Nonnegative built-in integer duration in frames; zero is
-            permitted. Booleans and other types are rejected.
+        frames (int): Nonnegative duration in frames; zero and integer subclasses
+            are accepted. Booleans and nonintegers are rejected.
 
     Raises:
         ValueError: If the duration is not a nonnegative integer.
     """
-    if type(frames) is not int or frames < 0:
+    if (not is_integer(frames)) or frames < 0:
         raise ValueError("Frame count must be a nonnegative integer")
 
 
@@ -52,8 +54,8 @@ def collect_button_ids(held: Iterable[int]) -> set[int]:
     raised by the input iterator propagate to the caller.
 
     Args:
-        held (Iterable[int]): Built-in integer libretro button IDs from BTN, possibly a
-            generator. Booleans and noninteger numeric values are rejected.
+        held (Iterable[int]): Integer libretro button IDs from BTN, possibly a generator.
+            Integer subclasses are accepted; booleans and nonintegers are rejected.
 
     Returns:
         set[int]: Independent set that can be reused for every requested frame.
@@ -65,6 +67,6 @@ def collect_button_ids(held: Iterable[int]) -> set[int]:
     # Check before deduplication: 1, True and 1.0 compare equal in a set,
     # which could hide an invalid ID when a valid one appears first.
     buttons = list(held)
-    if any(type(button) is not int or button not in BUTTON_IDS for button in buttons):
+    if any((not is_integer(button)) or button not in BUTTON_IDS for button in buttons):
         raise ValueError("Unsupported joypad button ID")
     return set(buttons)

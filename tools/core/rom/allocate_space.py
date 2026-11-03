@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from core.validation.validate_integers import is_integer
+
 # Allocation ranges below are half-open byte offsets in the unheadered ROM.
 # Proportional-text storage uses CPU banks $BA-$BB and $E0-$FC. The latter
 # range exists after expansion to the 4 MiB declared by the ROM header.
@@ -46,25 +48,28 @@ def allocate_bank_tail(
         n (int): Integer number of consecutive bytes to reserve in the bank tail;
             booleans are rejected.
         free (dict[int, list[int]]): Mutable bank-index to [next-free offset,
-            exclusive bank end] cache.
+            exclusive bank end] cache. Boolean bank keys and cursors are rejected;
+            integer subclasses are accepted.
 
     Returns:
         int: Reserved region start as an unheadered file offset.
 
     Raises:
         ValueError: If the bank is not an integer identifying a complete LoROM bank, or its
-            cached free-space cursors are not valid integer offsets.
+            cached bank keys or free-space cursors are not valid integers.
         AssertionError: If the size is not an integer from 0 through 32768, or no allowed region
             can satisfy the requested allocation.
     """
-    if type(n) is not int or not 0 <= n <= 0x8000:
+    if (not is_integer(n)) or not 0 <= n <= 0x8000:
         raise AssertionError("Allocation size must be an integer and fit one 32KB bank")
 
-    if type(bank) is not int or not 0 <= bank < 128 or (bank + 1) * 0x8000 > len(rom):
+    if (not is_integer(bank)) or not 0 <= bank < 128 or (bank + 1) * 0x8000 > len(rom):
         raise ValueError("Allocation requires a complete ROM bank")
 
     # Find this bank's trailing FF run once. The shared cursor then tracks
     # allocations without rescanning bytes that the compiler has already written.
+    if any(not is_integer(key) for key in free):
+        raise ValueError("Free-space bank keys must be integers, not booleans")
     if bank not in free:
         b0 = bank * 0x8000
         i = b0 + 0x8000
@@ -76,8 +81,8 @@ def allocate_bank_tail(
 
     lo, hi = free[bank]
     if (
-        type(lo) is not int
-        or type(hi) is not int
+        (not is_integer(lo))
+        or (not is_integer(hi))
         or not bank * 0x8000 <= lo <= hi == (bank + 1) * 0x8000
     ):
         raise ValueError("Cached free-space cursor does not belong to its ROM bank")
@@ -126,8 +131,8 @@ class Space:
         previous_end = 0
         for start, end in self.regions:
             if (
-                type(start) is not int
-                or type(end) is not int
+                (not is_integer(start))
+                or (not is_integer(end))
                 or not previous_end <= start < end <= 0x400000
             ):
                 raise ValueError("Allocation regions must be ordered, disjoint ROM ranges")
@@ -154,7 +159,7 @@ class Space:
             AssertionError: If the size is not an integer from 0 through 32768, or no allowed
                 region can satisfy it. Allocation cursors remain unchanged.
         """
-        if type(n) is not int or not 0 <= n <= 0x8000:
+        if (not is_integer(n)) or not 0 <= n <= 0x8000:
             raise AssertionError("Allocation size must be an integer and fit one 32KB bank")
 
         # Search without consuming regions: an unsuccessful large reservation

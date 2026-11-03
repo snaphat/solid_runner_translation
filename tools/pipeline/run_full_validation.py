@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from core.validation.validate_integers import is_integer
+
 if TYPE_CHECKING:
     import os
     import pathlib
@@ -158,7 +160,7 @@ def run_full_validation(workers: int = 12, out: str | os.PathLike[str] | None = 
         OSError: If input files cannot be read, output files cannot be written, or a validation
             command cannot be started.
     """
-    if type(workers) is not int or not 1 <= workers <= 12:
+    if (not is_integer(workers)) or not 1 <= workers <= 12:
         raise ValueError("Full validation requires 1-12 workers")
 
     # Validate both locations before creating anything. A linked build/ parent

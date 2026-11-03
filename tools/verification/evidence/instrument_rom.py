@@ -41,6 +41,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, TypedDict
 
+from core.validation.validate_integers import is_integer
+
 if TYPE_CHECKING:
     import ctypes
 from pathlib import Path
@@ -514,10 +516,11 @@ def build_instrumented_rom(
     """
     This function returns ROM data with added code that records game text and display state.
 
-    Text-start, page-end and display-state hooks are always installed. Disabling
-    glyph_log omits the English glyph-draw hook for the Japanese reader.
-    Accumulation preserves menu glyphs drawn before a
-    dialogue page restarts its trace.
+    Text-start, page-end and display-state hooks are always installed. Disabling glyph_log omits
+    the English glyph-draw hook for the Japanese reader. Accumulation preserves menu glyphs
+    drawn before a dialogue page restarts its trace.
+
+    Boolean options require bool values; numeric zero and one are rejected.
 
     Args:
         release (bytes | bytearray): Uninstrumented release or original ROM; never modified
@@ -534,12 +537,15 @@ def build_instrumented_rom(
             additional cartridge SRAM used by those routines.
 
     Raises:
+        TypeError: If glyph_log or accumulate is not a boolean.
         ValueError: If the image does not contain the complete reserved hook range, hook
             instructions/free space do not match expectations, or instrumentation assembly
             fails.
         OSError: If temporary files cannot be created, read, written or removed, or Asar cannot
             be started.
     """
+    if type(glyph_log) is not bool or type(accumulate) is not bool:
+        raise TypeError("Boolean options require bool values: glyph_log, accumulate")
     # Slicing a short image would silently omit missing bytes from the free-space
     # check. Require the entire reserved range before inspecting any hook sites.
     if len(release) < FREE[1]:
@@ -618,8 +624,8 @@ def read_glyph_log(
     # Check types before arithmetic so invalid bounds have the same documented
     # failure as out-of-range bounds, and booleans cannot act as offsets.
     if (
-        type(start) is not int
-        or (end is not None and type(end) is not int)
+        (not is_integer(start))
+        or (end is not None and (not is_integer(end)))
         or start < 0
         or start > LOG_SIZE
         or start % 12

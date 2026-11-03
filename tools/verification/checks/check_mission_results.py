@@ -21,6 +21,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.rom.convert_addresses import convert_snes_to_file
 from core.text.read_compiled_text import decode_literal_glyphs
+from core.validation.validate_integers import is_integer
 from emulator.snes9x_core import Emu
 from verification.evidence import check_screen_pixels as screen_ink
 from verification.evidence import instrument_rom as instrument
@@ -50,7 +51,7 @@ def enter(emu: Emu, state: bytes, index: int) -> None:
             restoring state or changing emulated memory.
         RuntimeError: If the emulator rejects the serialized state.
     """
-    if type(index) is not int or not 0 <= index < MISSION_COUNT:
+    if (not is_integer(index)) or not 0 <= index < MISSION_COUNT:
         raise ValueError("Mission-result index must be an integer from 0 through 16")
 
     emu.load_state(state)

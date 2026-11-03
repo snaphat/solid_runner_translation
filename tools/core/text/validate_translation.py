@@ -27,6 +27,7 @@ from core.text import layout_text, measure_text
 from core.text.read_text_tokens import parse_encoded_text as parse_encoded_text
 from core.text.read_text_tokens import split_dialogue_pages
 from core.text.read_translation_files import TextMode, TranslationEntry
+from core.validation.validate_integers import is_integer
 
 
 class EntryLayout(TypedDict):
@@ -185,7 +186,7 @@ def derive_entry_layout_constraints(e: TranslationEntry) -> EntryLayout:
         raise ValueError("Text slot is outside the ROM or has reversed bounds")
     for field in ("w", "max_lines", "max_name_bytes"):
         value = e.get(field)
-        if value is not None and (type(value) is not int or value <= 0):
+        if value is not None and ((not is_integer(value)) or value <= 0):
             raise ValueError(f"{field} must be a positive integer")
 
     # w overrides the layout width: pixels except for menus, which use cells.
@@ -262,8 +263,11 @@ def encode_entry_layout(
         ValueError: If markup cannot be encoded, a width or menu column is invalid, a font
             record cannot be measured, or an inserted item or opponent name has no supplied
             width.
+            Also raised if a supplied name_width is a boolean, noninteger or negative.
         AssertionError: If a word or menu label does not fit its assigned width.
     """
+    if name_width is not None and (not is_integer(name_width) or name_width < 0):
+        raise ValueError("name_width must be a nonnegative integer, not a boolean")
     mode = c["mode"]
 
     # Use the same name reservation as ROM insertion. Otherwise validation could
@@ -320,7 +324,12 @@ def validate_translation_entry(
     Returns:
         list[str]: Validation diagnostics; empty when all entry constraints
             pass.
+
+    Raises:
+        ValueError: If a supplied name_width is a boolean, noninteger or negative.
     """
+    if name_width is not None and (not is_integer(name_width) or name_width < 0):
+        raise ValueError("name_width must be a nonnegative integer, not a boolean")
     text = e["en"]
     try:
         c = derive_entry_layout_constraints(e)

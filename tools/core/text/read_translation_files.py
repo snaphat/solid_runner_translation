@@ -37,6 +37,8 @@ from typing import (
     cast,
 )
 
+from core.validation.validate_integers import is_integer
+
 if TYPE_CHECKING:
     import os
 import json
@@ -504,7 +506,7 @@ def _validate_metadata(entry_id: str, metadata: dict[str, object]) -> None:
     # bool is an int subclass; accepting it as a width would create a one-pixel
     # layout instead of reporting the malformed JSON value.
     for key in ("w", "max_lines", "max_name_bytes"):
-        if key in metadata and (type(metadata[key]) is not int or cast(int, metadata[key]) <= 0):
+        if key in metadata and ((not is_integer(metadata[key])) or cast(int, metadata[key]) <= 0):
             raise ValueError(f"{entry_id}: {key} must be a positive integer")
     if "skip" in metadata and not isinstance(metadata["skip"], (bool, str)):
         raise ValueError(f"{entry_id}: skip must be a boolean or reason string")
@@ -538,7 +540,7 @@ def _validate_metadata(entry_id: str, metadata: dict[str, object]) -> None:
                 if any(not isinstance(row, list) for row in values):
                     raise ValueError(f"{entry_id}: menu_columns must contain row lists")
                 rows = cast(list[list[object]], values)
-            if any(type(value) is not int or value < 0 for row in rows for value in row):
+            if any((not is_integer(value)) or value < 0 for row in rows for value in row):
                 raise ValueError(f"{entry_id}: {key} must contain nonnegative integers")
 
 

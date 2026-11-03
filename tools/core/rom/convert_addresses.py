@@ -1,28 +1,29 @@
 """
 This module converts between SNES addresses used in game pointers and byte offsets used to index a ROM file.
 
-Game pointers use SNES bank and address values; Python code indexes the ROM
-file by byte offset. These helpers translate between the two using the LoROM
-mapping, including pointers stored as separate low/high/bank bytes and 16-bit
-pointers whose bank is supplied separately. They return integers and do not
-read or change any file.
+Game pointers use SNES bank and address values; Python code indexes the ROM file by byte offset.
+These helpers translate between the two using the LoROM mapping, including pointers stored as
+separate low/high/bank bytes and 16-bit pointers whose bank is supplied separately. They return
+integers and do not read or change any file.
 
-The mapping stores 32 KiB per bank and covers file offsets $000000-$3FFFFF.
-For example, SNES address $81:8000 maps to file offset $008000. File offsets
-exclude any 512-byte copier header. Integer ranges are checked, but converting
-a bus address does not establish that it selects ROM rather than RAM or I/O.
-Address mirror bits are discarded, so the reverse conversion returns a
-canonical address rather than necessarily the original address.
+The mapping stores 32 KiB per bank and covers file offsets $000000-$3FFFFF. For example, SNES
+address $81:8000 maps to file offset $008000. File offsets exclude any 512-byte copier header.
+Integer subclasses are accepted; booleans and nonintegers are rejected. Integer ranges are
+checked, but converting a bus address does not establish that it selects ROM rather than RAM or
+I/O. Address mirror bits are discarded, so the reverse conversion returns a canonical address
+rather than necessarily the original address.
 """
+
+from core.validation.validate_integers import is_integer
 
 
 def convert_snes_to_file(pointer: int) -> int:
     """
     Convert a packed SNES bus address to an unheadered LoROM file offset.
 
-    The high bank bit and address bit 15 are mirrors and are discarded. This
-    normalization does not establish that the bus address actually selects ROM;
-    RAM and register addresses must be excluded by the caller.
+    The high bank bit and address bit 15 are mirrors and are discarded. This normalization does
+    not establish that the bus address actually selects ROM; RAM and register addresses must be
+    excluded by the caller.
 
     Args:
         pointer (int): Packed SNES bus address, from 0x000000 through 0xFFFFFF.
@@ -31,10 +32,11 @@ def convert_snes_to_file(pointer: int) -> int:
         int: Byte offset in the unheadered ROM.
 
     Raises:
-        ValueError: If pointer is outside the unsigned 24-bit range.
+        ValueError: If pointer is a boolean or noninteger, or is outside the
+            unsigned 24-bit range.
     """
-    if not 0 <= pointer <= 0xFFFFFF:
-        raise ValueError(f"SNES address must be in 0x000000-0xFFFFFF, got {pointer:#x}")
+    if not is_integer(pointer) or not 0 <= pointer <= 16777215:
+        raise ValueError(f"SNES address must be in 0x000000-0xFFFFFF, got {pointer!r}")
 
     # CPU banks $00-$7F and $80-$FF share the same file-bank numbering.
     # Each bank contributes 32 KiB; bit 15 of the CPU address is discarded.
@@ -45,9 +47,9 @@ def convert_pointer_bytes_to_file(lo: int, hi: int, bank: int) -> int:
     """
     Convert separate low, high, and bank address bytes to a ROM file offset.
 
-    The bytes need not be adjacent in the source ROM. This helper packs values
-    already read by the caller, then applies convert_snes_to_file() and its
-    mirror handling; it does not read instruction operands itself.
+    The bytes need not be adjacent in the source ROM. This helper packs values already read by
+    the caller, then applies convert_snes_to_file() and its mirror handling; it does not read
+    instruction operands itself.
 
     Args:
         lo (int): Low address byte, 0-255.
@@ -58,13 +60,14 @@ def convert_pointer_bytes_to_file(lo: int, hi: int, bank: int) -> int:
         int: Byte offset in the unheadered ROM.
 
     Raises:
-        ValueError: If any operand is outside the unsigned byte range.
+        ValueError: If any operand is a boolean or noninteger, or is outside the
+            unsigned byte range.
     """
     # Check each byte before packing so an oversized operand cannot spill into
     # the next address field and appear to be a valid packed pointer.
     for name, value in (("lo", lo), ("hi", hi), ("bank", bank)):
-        if not 0 <= value <= 0xFF:
-            raise ValueError(f"{name} must be in 0x00-0xFF, got {value:#x}")
+        if not is_integer(value) or not 0 <= value <= 255:
+            raise ValueError(f"{name} must be in 0x00-0xFF, got {value!r}")
 
     return convert_snes_to_file(lo | hi << 8 | bank << 16)
 
@@ -83,10 +86,11 @@ def convert_file_offset_to_snes(off: int) -> int:
             converted to off; the original bank and address mirror bits are lost.
 
     Raises:
-        ValueError: If off is outside the standard 4 MiB LoROM range.
+        ValueError: If off is a boolean or noninteger, or is outside the
+            standard 4 MiB LoROM range.
     """
-    if not 0 <= off <= 0x3FFFFF:
-        raise ValueError(f"LoROM file offset must be in 0x000000-0x3FFFFF, got {off:#x}")
+    if not is_integer(off) or not 0 <= off <= 4194303:
+        raise ValueError(f"LoROM file offset must be in 0x000000-0x3FFFFF, got {off!r}")
 
     # Select a high CPU bank and its upper-half address window. The file's
     # 32 KiB bank index supplies the CPU bank; its low 15 bits supply the address.
@@ -107,13 +111,18 @@ def resolve_bank_pointer(pointer: int, source: int) -> int:
         int: Byte offset in the same file bank as source.
 
     Raises:
-        ValueError: If pointer is outside the unsigned 16-bit range, or source is outside the
+        ValueError: If pointer or source is a boolean or noninteger, pointer is outside
+            the unsigned 16-bit range, or source is outside the
             standard 4 MiB LoROM range.
     """
-    if not 0 <= pointer <= 0xFFFF:
-        raise ValueError(f"Bank-local pointer must be in 0x0000-0xFFFF, got {pointer:#x}")
-    if not 0 <= source <= 0x3FFFFF:
-        raise ValueError(f"Source file offset must be in 0x000000-0x3FFFFF, got {source:#x}")
+    if not is_integer(pointer) or not 0 <= pointer <= 65535:
+        raise ValueError(
+            f"Bank-local pointer must be in 0x0000-0xFFFF, got {pointer!r}"
+        )
+    if not is_integer(source) or not 0 <= source <= 4194303:
+        raise ValueError(
+            f"Source file offset must be in 0x000000-0x3FFFFF, got {source!r}"
+        )
 
     # Retain the source's file-bank bits and replace its within-bank offset.
     return (source & ~0x7FFF) | (pointer & 0x7FFF)

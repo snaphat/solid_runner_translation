@@ -16,6 +16,7 @@ restrictions.
 from collections.abc import Iterator
 
 from core.rom.convert_addresses import convert_pointer_bytes_to_file
+from core.validation.validate_integers import is_integer
 
 # Operand counts exclude the F8 prefix and subopcode. The native event
 # interpreter reads these counts at bus address $84:AA3B + 2 * subopcode.
@@ -75,7 +76,7 @@ def read_text_token_size(data: bytes | bytearray, offset: int) -> int:
         KeyError: If an F8 subopcode is unsupported; args contains (subopcode, offset).
     """
     _validate_text_buffer(data)
-    if type(offset) is not int:
+    if not is_integer(offset):
         raise TypeError("Token offset must be an integer; booleans are not offsets")
     if not 0 <= offset < len(data):
         raise IndexError(f"outside ROM at {offset:06X}")
@@ -129,7 +130,7 @@ def decode_glyph_index(data: bytes | bytearray, offset: int) -> int:
         ValueError: If the byte at offset is the F8 command prefix or an FD-FF terminator.
     """
     _validate_text_buffer(data)
-    if type(offset) is not int:
+    if not is_integer(offset):
         raise TypeError("Glyph offset must be an integer; booleans are not offsets")
     if not 0 <= offset < len(data):
         raise IndexError(f"Glyph offset outside data: {offset}")
@@ -190,11 +191,11 @@ def walk_text_tokens(
         KeyError: If an F8 subopcode is unsupported.
     """
     _validate_text_buffer(data)
-    if type(start) is not int:
+    if not is_integer(start):
         raise TypeError("Text start must be an integer; booleans are not offsets")
     if type(follow_jumps) is not bool:
         raise TypeError("follow_jumps must be a boolean")
-    if max_tokens is not None and (type(max_tokens) is not int or max_tokens < 0):
+    if max_tokens is not None and ((not is_integer(max_tokens)) or max_tokens < 0):
         raise ValueError(f"max_tokens must be a nonnegative integer or None, got {max_tokens!r}")
 
     offset = start

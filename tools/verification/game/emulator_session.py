@@ -15,26 +15,27 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence, cast
 
+from core.validation.validate_integers import is_integer
+
 if TYPE_CHECKING:
     import pathlib
 import ctypes
 import hashlib
 
+from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics.write_png import write_png
 from core.rom.convert_addresses import convert_snes_to_file
-from core.files.validate_binary_buffers import require_byte_buffer
 from core.text.read_compiled_text import decode_literal_glyphs
+from emulator.snes9x_core import Emu
+from emulator.validate_controller_input import collect_button_ids, validate_frame_count
+from verification.evidence import check_dialogue_pixels as ink
+from verification.evidence import check_screen_pixels as screen_ink
+from verification.evidence import instrument_rom as instrument
 from verification.evidence.index_gameplay_text import (
     get_text_slot_ranges,
     index_item_names,
     index_page_starts,
 )
-from emulator.snes9x_core import Emu
-from emulator.validate_controller_input import collect_button_ids, validate_frame_count
-
-from verification.evidence import check_dialogue_pixels as ink
-from verification.evidence import check_screen_pixels as screen_ink
-from verification.evidence import instrument_rom as instrument
 from verification.evidence.locate_text_windows import get_capture_window
 from verification.evidence.read_text_layers import capture_text_layers
 
@@ -192,8 +193,10 @@ class GameSession:
         """
         Map a text file offset to (entry ID, page number), or (None, None).
 
-        Japanese page numbers count observations of the original entry rather than
-        English compiled pages.
+        Japanese page numbers count observations of the original entry rather than English
+        compiled pages.
+
+        Integer inputs accept subclasses; booleans are rejected.
 
         Args:
             start (int): Text start as an unheadered file offset in the release
@@ -202,7 +205,12 @@ class GameSession:
         Returns:
             tuple[str, int] | tuple[None, None]: Entry ID and one-based page number, or (None, None)
                 when unidentified.
+
+        Raises:
+            ValueError: If start is a boolean or noninteger.
         """
+        if not is_integer(start):
+            raise ValueError("start must be an integer, not a boolean")
         # English has explicit relocated page starts. Japanese keeps original slot
         # ranges, so its page number follows captures already recorded for that entry.
         if self.english:
@@ -281,12 +289,12 @@ class GameSession:
 
         Raises:
             ValueError: If the region ID is unsupported or the core exposes no backing
-                memory, or the ID is not a built-in integer.
+                memory, or the ID is not an integer (excluding booleans).
         """
         # ROM reloads reacquire these views because the core may replace its
         # backing allocations; old views still reference memory the core may have released.
         lib = self.emu.lib
-        if type(region) is not int or region not in (0, 1, 2, 3):
+        if (not is_integer(region)) or region not in (0, 1, 2, 3):
             raise ValueError("Unsupported libretro memory region")
         size = lib.retro_get_memory_size(region)
         address = lib.retro_get_memory_data(region)

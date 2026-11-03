@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Iterable
 
 from core.text import layout_text, measure_text
 from core.text.get_text_limits import is_combat_caption
+from core.validation.validate_integers import is_integer
 
 if TYPE_CHECKING:
     from core.text.insert_text import CompleteInsertionRecord
@@ -65,6 +66,7 @@ def validate_combat_captions(
             nor a positive integer, or a combat caption wraps, contains a page break or an
             FD/FE/FF terminator, or exceeds its strip allowance, a required system-name width is
             absent or invalid, or an encoded token or measured font record is invalid.
+            Also raised if a supplied name_width is a boolean, noninteger or negative.
         KeyError: If a caption character has no game encoding.
 
     Examples:
@@ -77,6 +79,8 @@ def validate_combat_captions(
         width = measure_text.measure_name_width(rom, names)
         validate_combat_captions(rom, messages, name_width=width)
     """
+    if name_width is not None and (not is_integer(name_width) or name_width < 0):
+        raise ValueError("name_width must be a nonnegative integer, not a boolean")
     errors: list[str] = []
     checked = 0
 
@@ -86,7 +90,7 @@ def validate_combat_captions(
 
         # Validate before capping the width: min() could otherwise turn an
         # oversized fractional value or infinity into a valid integer limit.
-        if width is not None and (type(width) is not int or width <= 0):
+        if width is not None and ((not is_integer(width)) or width <= 0):
             raise ValueError(f"{start:06X}: caption width must be None or a positive integer")
 
         checked += 1

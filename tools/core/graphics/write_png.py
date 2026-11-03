@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, Sequence
 
+from core.validation.validate_integers import is_integer
+
 if TYPE_CHECKING:
     import os
 import struct
@@ -34,18 +36,18 @@ def write_png(path: str | os.PathLike[str], rows: Sequence[bytes], channels: Lit
             scanlines without PNG filter bytes. Each row must contain a
             positive whole number of pixels.
         channels (Literal[1, 3]): Bytes per pixel: one for grayscale or three
-            for RGB. Only built-in int values are accepted; booleans and
-            int subclasses are rejected.
+            for RGB. Integer subclasses are accepted; booleans and other
+            noninteger values are rejected.
 
     Raises:
-        ValueError: If channels is not a built-in int equal to 1 or 3,
+        ValueError: If channels is a boolean or noninteger, is neither 1 nor 3,
             rows have different lengths, or the image does not contain a positive
             whole number of pixels.
         OSError: If the destination cannot be opened or written.
     """
     # Validate before opening the destination; a malformed image must not
     # replace an existing screenshot with an invalid PNG stream.
-    if type(channels) is not int or channels not in (1, 3):
+    if (not is_integer(channels)) or channels not in (1, 3):
         raise ValueError("PNG channels must be 1 (grayscale) or 3 (RGB)")
     if not rows or not rows[0] or len(rows[0]) % channels:
         raise ValueError("PNG rows must contain a positive whole number of pixels")

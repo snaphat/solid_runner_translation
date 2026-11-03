@@ -28,6 +28,7 @@ from core.rom.convert_addresses import convert_file_offset_to_snes
 from core.text import layout_text, measure_text
 from core.text.encode_text import encode_text
 from core.text.read_text_tokens import split_dialogue_pages
+from core.validation.validate_integers import is_integer
 
 # A complete compiler record includes explicit pointer and address-operand lists.
 CompleteInsertionRecord: TypeAlias = tuple[int, int, str, str, int | None, list[int], list[int]]
@@ -134,12 +135,15 @@ def insert_translations(
         ValueError: If the candidate is not a 4 MiB ROM, or a slot, layout mode, width or
             reference operand is invalid, or a required system-name width is absent or invalid,
             or encoded markup/tokens are malformed.
+            Also raised if a supplied name_width is a boolean, noninteger or negative.
         KeyError: If a source character has no game encoding.
         AssertionError: If allocation fails, the original text slot is too small, or the
             inserted pages cannot retain the segments required by the game. Paginated dialogue
             requires room for native segments in its original slot and cannot use a standalone
             payload reached through retargeted references.
     """
+    if name_width is not None and (not is_integer(name_width) or name_width < 0):
+        raise ValueError("name_width must be a nonnegative integer, not a boolean")
     # Use separate allocators for proportional text, fixed text and short
     # jump targets because the reader chooses its font and address rules by bank.
     # Allocation regions refer to the expanded image. Python slice assignments
@@ -151,25 +155,25 @@ def insert_translations(
     for msg in messages:
         start, end, _ = msg[:3]
         if (
-            type(start) is not int
-            or type(end) is not int
+            (not is_integer(start))
+            or (not is_integer(end))
             or not 0 <= start <= end < len(rom)
             or end >= 0x400000
         ):
             raise ValueError("Text slot must lie within the ROM and exclude its terminator")
         if len(msg) > 3 and msg[3] not in ("v", "p", "n", "f", "m", "c"):
             raise ValueError(f"Unsupported text mode: {msg[3]!r}")
-        if len(msg) > 4 and msg[4] is not None and (type(msg[4]) is not int or msg[4] <= 0):
+        if len(msg) > 4 and msg[4] is not None and ((not is_integer(msg[4])) or msg[4] <= 0):
             raise ValueError("Text width must be positive")
         if (
             len(msg) > 5
             and msg[5]
-            and any(type(at) is not int or not 0 <= at < len(rom) - 1 for at in msg[5])
+            and any((not is_integer(at)) or not 0 <= at < len(rom) - 1 for at in msg[5])
         ):
             raise ValueError("Text pointer extends beyond the ROM")
         if len(msg) > 6 and msg[6]:
             if len(msg[6]) != 3 or any(
-                type(at) is not int or not 0 <= at < len(rom) for at in msg[6]
+                (not is_integer(at)) or not 0 <= at < len(rom) for at in msg[6]
             ):
                 raise ValueError("Immediate references must identify three ROM operand bytes")
             if len(set(msg[6])) != 3:

@@ -19,6 +19,7 @@ from typing import Any, Iterable, Mapping, TypedDict
 
 from core.files.validate_binary_buffers import require_byte_buffer
 from core.text import read_translation_files as script_files
+from core.validation.validate_integers import is_integer
 from pipeline.compilation import record_build_inputs as build_state
 
 
@@ -37,12 +38,28 @@ class CaptureIdentity(TypedDict):
     sources: dict[str, str]
 
 
+def _has_valid_category_flags(page: dict[str, Any]) -> bool:
+    """
+    Return whether category flags use supported boolean or explanation values.
+
+    Args:
+        page (dict[str, Any]): Capture with optional forced and peripheral flags.
+            Missing values and None mean no flag; nonempty strings retain
+            diagnostic explanations. Numeric values are invalid.
+
+    Returns:
+        bool: Whether both flags are absent, None, booleans or strings.
+    """
+    return all(page.get(name) is None or isinstance(page.get(name), (bool, str))
+               for name in ("forced", "peripheral"))
+
+
 def is_peripheral_capture(page: dict[str, Any]) -> bool:
     """
     Return whether a capture uses a peripheral fixture.
 
-    The function recognizes either a truthy peripheral field or a fixture description
-    containing "Turbo File stand-in driver".
+    The function recognizes a true peripheral flag, a nonempty explanation string,
+    or the Turbo File fixture label. Numeric flags do not identify a peripheral.
 
     Args:
         page (dict[str, Any]): Capture whose peripheral flag or fixture label identifies
@@ -52,8 +69,11 @@ def is_peripheral_capture(page: dict[str, Any]) -> bool:
         bool: Whether the capture records an explicit peripheral flag or the
             supported Turbo File fixture label.
     """
-    return bool(
-        page.get("peripheral") or "Turbo File stand-in driver" in str(page.get("fixture", ""))
+    flag = page.get("peripheral")
+    return (
+        flag is True
+        or isinstance(flag, str) and bool(flag)
+        or "Turbo File stand-in driver" in str(page.get("fixture", ""))
     )
 
 
@@ -69,11 +89,13 @@ def is_native_capture(page: dict[str, Any]) -> bool:
 
     Returns:
         bool: Whether ordinary native coverage is permitted by the capture's
-            credit and evidence-category fields. ROM hashes, translation hashes and
+            credit and evidence-category fields. Numeric category flags are rejected.
+            ROM hashes, translation hashes and
             pixel placement are checked separately.
     """
     return (
-        page.get("credit", True) is True
+        _has_valid_category_flags(page)
+        and page.get("credit", True) is True
         and not page.get("forced")
         and not is_peripheral_capture(page)
     )
@@ -195,6 +217,8 @@ def is_eligible_capture(
     Check that a capture matches the current ROM and translation and uses an allowed capture
     category.
 
+    Boolean options require bool values; numeric zero and one are rejected.
+
     Args:
         page (dict[str, Any]): Capture record.
         state (CaptureIdentity): Expected ROM and per-entry translation-source hashes from
@@ -205,14 +229,19 @@ def is_eligible_capture(
 
     Returns:
         bool: True for a credited, current capture with a positive integer page and boolean
-            verdict in an allowed category. Pixel success is checked separately.
+            verdict in an allowed category. Numeric category flags are rejected. Pixel success
+            is checked separately.
 
     Raises:
+        TypeError: If allow_forced or allow_peripheral is not a boolean.
         KeyError: If capture comparison reaches a required rom_sha256 or sources lookup but that
             field is absent from state.
     """
+    if type(allow_forced) is not bool or type(allow_peripheral) is not bool:
+        raise TypeError("Boolean options require bool values: allow_forced, allow_peripheral")
     return (
-        type(page.get("page")) is int
+        _has_valid_category_flags(page)
+        and (is_integer(page.get("page")))
         and page["page"] > 0
         and type(page.get("verified")) is bool
         and page.get("credit", True) is True
@@ -232,6 +261,8 @@ def collect_verified_page_pairs(
     """
     Collect current, pixel-verified (entry ID, one-based page) pairs.
 
+    Boolean options require bool values; numeric zero and one are rejected.
+
     Args:
         pages (Iterable[dict[str, Any]]): Capture records, including possible duplicates.
         state (CaptureIdentity): Expected ROM and per-entry translation-source hashes from
@@ -244,9 +275,12 @@ def collect_verified_page_pairs(
         set[tuple[str, int]]: Distinct pairs passing is_eligible_capture() and verified checks.
 
     Raises:
+        TypeError: If allow_forced or allow_peripheral is not a boolean.
         KeyError: If capture comparison reaches a required rom_sha256 or sources lookup but that
             field is absent from state.
     """
+    if type(allow_forced) is not bool or type(allow_peripheral) is not bool:
+        raise TypeError("Boolean options require bool values: allow_forced, allow_peripheral")
     return {
         (p["entry"], p["page"])
         for p in pages

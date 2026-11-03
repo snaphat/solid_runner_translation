@@ -16,6 +16,7 @@ from typing import Sequence
 from core.files.validate_binary_buffers import require_byte_buffer
 from core.graphics import compress_graphics, read_resources
 from core.rom.convert_addresses import convert_file_offset_to_snes
+from core.validation.validate_integers import is_integer
 
 
 def _require_exclusive_allocation(
@@ -85,7 +86,7 @@ def pack_resource_group(
     table = read_resources.read_bank_resource_table(bank, rom=source)
     if table is None:
         raise AssertionError("Native resource table is invalid")
-    if type(first) is not int or not 0 <= first < len(table) - 1:
+    if (not is_integer(first)) or not 0 <= first < len(table) - 1:
         raise ValueError("Resource group requires a valid first index and following boundary")
 
     packed: list[bytes] = []
@@ -160,7 +161,7 @@ def write_resource_group(
     table = read_resources.read_bank_resource_table(bank, rom=source)
     if table is None:
         raise AssertionError("Native resource table is invalid")
-    if type(first) is not int or not packed or not 0 <= first < first + len(packed) < len(table):
+    if (not is_integer(first)) or not packed or not 0 <= first < first + len(packed) < len(table):
         raise ValueError("Resource group must be nonempty and leave a following table boundary")
     # The first untouched resource defines the allocation limit. Check it before
     # changing pointers so an oversized group cannot overwrite the following block.
